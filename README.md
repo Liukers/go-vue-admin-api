@@ -20,6 +20,11 @@
 - ✅ 登录日志审计（支持开关控制）
 - ✅ Casbin RBAC 权限控制（API 级别）
 - ✅ 系统设置管理
+- ✅ 登录验证码（纯 Go 生成，内存存储，5 分钟 TTL）
+- ✅ 账户锁定（连续 5 次失败锁定 30 分钟）
+- ✅ 自定义参数校验（phone / password / status 标签）
+- ✅ 日志按日轮转（自动切割，防止单文件过大）
+- ✅ 统一错误码体系（1000~6999 分段语义化）
 
 ## 🏗️ 技术栈
 
@@ -55,9 +60,12 @@
 │   └── cors.go          # 跨域处理
 ├── docs/                # Swagger 文档
 ├── util/                # 工具函数
+│   └── captcha.go       # 验证码生成与校验（内存 TTL 存储）
 ├── global/              # 全局变量
 ├── conf/                # 配置加载
 ├── core/                # 核心初始化
+│   ├── validator.go     # 自定义 Gin 校验器（phone / password / status）
+│   └── logrus.go        # 日志按日轮转
 ├── flag/                # 命令行工具
 ├── setting.yaml         # 配置文件
 ├── Makefile             # 快捷命令
@@ -126,8 +134,10 @@ swag init -g main.go -o ./docs
 
 | 分类 | 接口路径                | 说明         |
 | ---- | ----------------------- | ------------ |
-| 认证 | `/api/v1/system/login`  | 用户登录     |
+| 认证 | `/api/v1/system/login`  | 用户登录（需验证码） |
 | 认证 | `/api/v1/system/logout` | 用户登出     |
+| 认证 | `/api/v1/system/captcha` | 获取验证码图片 |
+| 认证 | `/api/v1/system/refresh-token` | 刷新 JWT Token |
 | 用户 | `/api/v1/system/user/*` | 用户管理     |
 | 角色 | `/api/v1/system/role/*` | 角色管理     |
 | 菜单 | `/api/v1/system/menu/*` | 菜单管理     |
@@ -140,7 +150,7 @@ swag init -g main.go -o ./docs
 
 ### 环境要求
 
-- Go 1.20+
+- Go 1.24+
 - MySQL 5.7+
 
 ### 1. 克隆项目
@@ -166,6 +176,7 @@ CREATE DATABASE go-vue-admin DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unico
 system:
   addr: 8080 # 服务端口
   mode: debug # 运行模式: debug/release
+  trust-proxy: false # 是否信任反向代理的 X-Forwarded-For（生产环境有 Nginx/Traefik 时设为 true）
 
 mysql:
   path: localhost
@@ -419,21 +430,32 @@ go build -o go-vue-admin-api
      signing-key: your-strong-secret-key-here # 生产环境必须使用强密钥
    ```
 
-2. **修改数据库密码**
+2. **配置反向代理信任**（`setting.yaml`）
+
+   如果使用 Nginx/Traefik 等反向代理，设为 `true` 以正确获取客户端真实 IP（影响限流和日志）：
+
+   ```yaml
+   system:
+     trust-proxy: true
+   ```
+
+   **直连暴露模式请保持 `false`**，否则客户端可伪造 IP 绕过登录限流。
+
+3. **修改数据库密码**
 
    ```yaml
    mysql:
      password: "your-strong-password"
    ```
 
-3. **切换运行模式**
+4. **切换运行模式**
 
    ```yaml
    system:
      mode: release # 改为 release 模式
    ```
 
-4. **配置 CORS 白名单**
+5. **配置 CORS 白名单**
    ```yaml
    cors:
      allow-all: false # 关闭允许所有

@@ -47,3 +47,50 @@ type SystemMenu struct {
 func (SystemMenu) TableName() string {
 	return "system_menu"
 }
+
+// CreateRoleReq 创建角色请求
+ type CreateRoleReq struct {
+	RoleName    string `json:"roleName" binding:"required"`
+	RoleCode    string `json:"roleCode" binding:"required"`
+	Description string `json:"description"`
+	Status      int    `json:"status" binding:"omitempty,status"`
+	Sort        int    `json:"sort"`
+}
+
+// UpdateRoleReq 更新角色请求
+ type UpdateRoleReq struct {
+	ID          uint   `json:"id" binding:"required"`
+	RoleName    string `json:"roleName" binding:"required"`
+	Description string `json:"description"`
+	Status      int    `json:"status" binding:"omitempty,status"`
+	Sort        int    `json:"sort"`
+}
+
+// CreateMenuReq 创建菜单请求
+ type CreateMenuReq struct {
+	ParentID  uint   `json:"parentId"`
+	MenuName  string `json:"menuName" binding:"required"`
+	MenuType  int    `json:"menuType" binding:"required,oneof=1 2 3"`
+	Icon      string `json:"icon"`
+	Path      string `json:"path"`
+	Component string `json:"component"`
+	Perm      string `json:"perm"`
+	Sort      int    `json:"sort"`
+	Status    int    `json:"status" binding:"omitempty,status"`
+	Visible   int    `json:"visible" binding:"omitempty,oneof=1 2"`
+}
+
+// UpdateMenuReq 更新菜单请求
+ type UpdateMenuReq struct {
+	ID        uint   `json:"id" binding:"required"`
+	ParentID  uint   `json:"parentId"`
+	MenuName  string `json:"menuName" binding:"required"`
+	MenuType  int    `json:"menuType" binding:"required,oneof=1 2 3"`
+	Icon      string `json:"icon"`
+	Path      string `json:"path"`
+	Component string `json:"component"`
+	Perm      string `json:"perm"`
+	Sort      int    `json:"sort"`
+	Status    int    `json:"status" binding:"omitempty,status"`
+	Visible   int    `json:"visible" binding:"omitempty,oneof=1 2"`
+}

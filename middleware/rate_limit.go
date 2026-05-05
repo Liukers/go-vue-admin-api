@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"go-vue-admin/global"
 	"go-vue-admin/models/res"
 	"sync"
 	"time"
@@ -105,14 +106,15 @@ var (
 
 // getRealIP 获取真实IP（防止X-Forwarded-For伪造）
 func getRealIP(c *gin.Context) string {
-	// 优先使用直接连接的IP
+	// 默认使用直接连接的IP
 	ip := c.Request.RemoteAddr
 	if host, _, err := net.SplitHostPort(ip); err == nil {
 		ip = host
 	}
 	
-	// 如果是内网IP，尝试从Header获取（假设有可信的反向代理）
-	if isPrivateIP(ip) {
+	// 只有显式配置信任代理时才读取 X-Forwarded-For / X-Real-Ip
+	// 生产环境使用反向代理时，应在 setting.yaml 中设置 system.trust-proxy: true
+	if global.Config.System.TrustProxy {
 		xff := c.Request.Header.Get("X-Forwarded-For")
 		if xff != "" {
 			// 取第一个IP（最原始的客户端IP）

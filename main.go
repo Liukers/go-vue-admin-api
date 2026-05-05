@@ -23,6 +23,10 @@ func main() {
 	core.InitLogrus()
 	global.Log.Info("日志初始化成功")
 
+	// 初始化自定义验证器
+	core.InitValidator()
+	global.Log.Info("验证器初始化成功")
+
 	// 初始化数据库
 	global.DB = core.InitGorm()
 	if global.DB == nil {

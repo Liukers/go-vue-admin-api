@@ -15,52 +15,17 @@ type SystemRoleApi struct{}
 // SetRoleMenusReq 设置角色菜单权限请求（复用 service 层的定义）
 type SetRoleMenusReq = v1.SetRoleMenusReq
 
-// CreateRoleReq 创建角色请求（不包含系统字段）
-type CreateRoleReq struct {
-	RoleName    string `json:"roleName" binding:"required"`
-	RoleCode    string `json:"roleCode" binding:"required"`
-	Description string `json:"description"`
-	Status      int    `json:"status"`
-	Sort        int    `json:"sort"`
-}
+// CreateRoleReq 复用 models 包中的定义
+type CreateRoleReq = models.CreateRoleReq
 
-// UpdateRoleReq 更新角色请求（不包含系统字段）
-type UpdateRoleReq struct {
-	ID          uint   `json:"id" binding:"required"`
-	RoleName    string `json:"roleName" binding:"required"`
-	Description string `json:"description"`
-	Status      int    `json:"status"`
-	Sort        int    `json:"sort"`
-}
+// UpdateRoleReq 复用 models 包中的定义
+type UpdateRoleReq = models.UpdateRoleReq
 
-// CreateMenuReq 创建菜单请求（不包含系统字段）
-type CreateMenuReq struct {
-	ParentID  uint   `json:"parentId"`
-	MenuName  string `json:"menuName" binding:"required"`
-	MenuType  int    `json:"menuType" binding:"required,oneof=1 2 3"`
-	Icon      string `json:"icon"`
-	Path      string `json:"path"`
-	Component string `json:"component"`
-	Perm      string `json:"perm"`
-	Sort      int    `json:"sort"`
-	Status    int    `json:"status"`
-	Visible   int    `json:"visible"`
-}
+// CreateMenuReq 复用 models 包中的定义
+type CreateMenuReq = models.CreateMenuReq
 
-// UpdateMenuReq 更新菜单请求（不包含系统字段）
-type UpdateMenuReq struct {
-	ID        uint   `json:"id" binding:"required"`
-	ParentID  uint   `json:"parentId"`
-	MenuName  string `json:"menuName" binding:"required"`
-	MenuType  int    `json:"menuType" binding:"required,oneof=1 2 3"`
-	Icon      string `json:"icon"`
-	Path      string `json:"path"`
-	Component string `json:"component"`
-	Perm      string `json:"perm"`
-	Sort      int    `json:"sort"`
-	Status    int    `json:"status"`
-	Visible   int    `json:"visible"`
-}
+// UpdateMenuReq 复用 models 包中的定义
+type UpdateMenuReq = models.UpdateMenuReq
 
 // ==================== 角色管理 ====================
 

@@ -5,6 +5,9 @@ system:
   mode: debug
   # 数据库配置
   db-type: mysql
+  # 是否信任代理传来的 X-Forwarded-For / X-Real-Ip
+  # 生产环境使用反向代理（Nginx/Traefik）时设为 true，直连模式保持 false
+  trust-proxy: false
   # casbin配置
   casbin-config: |
     [request_definition]

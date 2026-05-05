@@ -1,6 +1,9 @@
 package v1
 
 import (
+	"strings"
+	"time"
+	"go-vue-admin/global"
 	"go-vue-admin/middleware"
 	"go-vue-admin/models"
 	"go-vue-admin/models/res"
@@ -17,13 +20,14 @@ type SystemUserApi struct{}
 // Login
 // @Tags 系统管理-认证
 // @Summary 用户登录
-// @Description 用户登录接口，返回JWT token
+// @Description 用户登录接口，需要验证码，返回JWT token
 // @Accept json
 // @Produce json
-// @Param data body models.SystemUserLoginReq true "登录参数"
+// @Param data body models.SystemUserLoginReq true "登录参数（含验证码）"
 // @Success 200 {object} res.Response{data=models.SystemUserLoginRes} "登录成功"
-// @Failure 400 {object} res.Response "请求参数错误"
+// @Failure 400 {object} res.Response "请求参数错误/验证码错误"
 // @Failure 401 {object} res.Response "登录失败，用户名或密码错误"
+// @Failure 423 {object} res.Response "账户已被锁定"
 // @Router /api/v1/system/login [post]
 func (a *SystemUserApi) Login(c *gin.Context) {
 	var req models.SystemUserLoginReq
@@ -34,9 +38,9 @@ func (a *SystemUserApi) Login(c *gin.Context) {
 
 	// 获取客户端信息
 	userAgent := c.Request.UserAgent()
-	resp, errCode := systemUserService.Login(&req, c.ClientIP(), userAgent)
-	if errCode != res.SuccessCode {
-		res.Fail(c, errCode)
+	resp, err := systemUserService.Login(&req, c.ClientIP(), userAgent)
+	if err != nil {
+		res.Error(c, err)
 		return
 	}
 
@@ -54,6 +58,88 @@ func (a *SystemUserApi) Login(c *gin.Context) {
 // @Router /api/v1/system/logout [post]
 func (a *SystemUserApi) Logout(c *gin.Context) {
 	middleware.LogoutHandler(c)
+}
+
+// RefreshToken
+// @Tags 系统管理-认证
+// @Summary 刷新Token
+// @Description 使用当前token刷新，返回新的token和过期时间。刷新前会校验token有效性、黑名单、用户状态及密码版本。
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Success 200 {object} res.Response{data=models.SystemUserLoginRes} "刷新成功"
+// @Failure 401 {object} res.Response "token无效或已过期/已被注销/用户已禁用"
+// @Router /api/v1/system/refresh-token [post]
+func (a *SystemUserApi) RefreshToken(c *gin.Context) {
+	authHeader := c.Request.Header.Get("Authorization")
+	if authHeader == "" {
+		res.Unauthorized(c, "请求未携带token")
+		return
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if !(len(parts) == 2 && parts[0] == "Bearer") {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "token格式错误")
+		return
+	}
+
+	tokenString := parts[1]
+	j := util.NewJWT()
+
+	// 1. 解析旧token
+	claims, err := j.ParseToken(tokenString)
+	if err != nil {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "token无效: "+err.Error())
+		return
+	}
+
+	// 2. 检查黑名单
+	tb := &middleware.TokenBlacklist{}
+	if tb.IsBlacklisted(tokenString) {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "token已被注销")
+		return
+	}
+
+	// 3. 查询用户并校验状态、密码版本、锁定状态
+	var user models.SystemUser
+	if err := global.DB.Select("password_version", "status", "locked_until", "role_id").First(&user, claims.UserID).Error; err != nil {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "用户不存在")
+		return
+	}
+
+	if user.PasswordVersion != claims.PasswordVersion {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "密码已修改，请重新登录")
+		return
+	}
+
+	if user.Status != 1 {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "用户已被禁用")
+		return
+	}
+
+	if user.LockedUntil != nil && time.Time(*user.LockedUntil).After(time.Now()) {
+		res.FailWithMessage(c, res.ErrorCodeAccountLocked, "账户已被锁定")
+		return
+	}
+
+	// 4. 刷新token
+	newToken, err := j.RefreshToken(tokenString)
+	if err != nil {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "token刷新失败: "+err.Error())
+		return
+	}
+
+	// 解析新token获取过期时间
+	claims, _ = j.ParseToken(newToken)
+	var expiresAt int64
+	if claims != nil && claims.ExpiresAt != nil {
+		expiresAt = claims.ExpiresAt.Unix()
+	}
+
+	res.Success(c, map[string]interface{}{
+		"token":     newToken,
+		"expiresAt": expiresAt,
+	})
 }
 
 // GetUserInfo
@@ -112,9 +198,9 @@ func (a *SystemUserApi) GetAsyncRoutes(c *gin.Context) {
 		return
 	}
 
-	routes, errCode := systemUserService.GetAsyncRoutes(uid)
-	if errCode != res.SuccessCode {
-		res.Fail(c, errCode)
+	routes, err := systemUserService.GetAsyncRoutes(uid)
+	if err != nil {
+		res.Error(c, err)
 		return
 	}
 
@@ -201,7 +287,7 @@ func (a *SystemUserApi) CreateUser(c *gin.Context) {
 // UpdateUser
 // @Tags 系统管理-用户
 // @Summary 更新用户
-// @Description 更新用户信息，用户名不能与其他用户重复。管理员不能通过此接口修改密码，请使用密码重置功能。
+// @Description 更新用户信息，用户名不能与其他用户重复。管理员可通过此接口修改密码（传入 password 字段）。
 // @Accept json
 // @Produce json
 // @Security BearerAuth
@@ -264,6 +350,33 @@ func (a *SystemUserApi) DeleteUser(c *gin.Context) {
 	if id == 0 {
 		res.Fail(c, res.ErrorCodeParamInvalid)
 		return
+	}
+
+	// 禁止删除当前登录用户自身
+	currentUserId, exists := c.Get("userId")
+	if exists {
+		if uid, ok := currentUserId.(uint); ok && uid == id {
+			res.FailWithMessage(c, res.ErrorCodeBusinessError, "不能删除当前登录用户")
+			return
+		}
+	}
+
+	// 禁止删除最后一个超级管理员
+	var targetUser models.SystemUser
+	if err := global.DB.Preload("Role").First(&targetUser, id).Error; err != nil {
+		res.Fail(c, res.ErrorCodeUserNotExist)
+		return
+	}
+	if targetUser.Role.RoleCode == "admin" {
+		var adminRole models.SystemRole
+		if err := global.DB.Where("role_code = ?", "admin").First(&adminRole).Error; err == nil {
+			var adminCount int64
+			global.DB.Model(&models.SystemUser{}).Where("role_id = ?", adminRole.ID).Count(&adminCount)
+			if adminCount <= 1 {
+				res.FailWithMessage(c, res.ErrorCodeBusinessError, "不能删除最后一个超级管理员")
+				return
+			}
+		}
 	}
 
 	if err := systemUserService.DeleteUser(id); err != nil {

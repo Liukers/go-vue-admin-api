@@ -11,6 +11,7 @@ var systemApi = v1.ApiGroupApp.SystemUserApi
 var systemRoleApi = v1.ApiGroupApp.SystemRoleApi
 var systemLogApi = v1.ApiGroupApp.SystemLogApi
 var systemSettingApi = v1.ApiGroupApp.SystemSettingApi
+var systemCaptchaApi = v1.ApiGroupApp.SystemCaptchaApi
 
 // InitSystemRouter 初始化系统管理路由
 func InitSystemRouter(rg *gin.RouterGroup) {
@@ -18,8 +19,10 @@ func InitSystemRouter(rg *gin.RouterGroup) {
 	{
 		// 公开路由（不需要认证）
 		// 登录接口添加限流保护，防止暴力破解
+		router.GET("/captcha", systemCaptchaApi.GetCaptcha)
 		router.POST("/login", middleware.LoginRateLimit(), systemApi.Login)
 		router.POST("/logout", systemApi.Logout)
+		router.POST("/refresh-token", middleware.LoginRateLimit(), systemApi.RefreshToken)
 
 		// 需要认证的路由
 		authRouter := router.Use(

@@ -7,6 +7,8 @@ import (
 	"go-vue-admin/models/res"
 	"go-vue-admin/util"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type SystemUserService struct{}
@@ -49,6 +51,14 @@ func (s *SystemUserService) CheckUserExistExceptID(username string, excludeID ui
 
 // CreateUser 创建用户
 func (s *SystemUserService) CreateUser(req *models.SystemUserReq) (uint, error) {
+	// 校验角色是否存在
+	if req.RoleID > 0 {
+		var role models.SystemRole
+		if err := global.DB.First(&role, req.RoleID).Error; err != nil {
+			return 0, res.NewAppErrorByCode(res.ErrorCodeNotFound)
+		}
+	}
+
 	user := models.SystemUser{
 		Username: req.Username,
 		Password: util.BcryptHash(req.Password),
@@ -139,42 +149,71 @@ func (s *SystemUserService) GetUserList(page, pageSize int, keyword, status stri
 // ==================== 业务方法 ====================
 
 // Login 用户登录
-func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, userAgent string) (*models.SystemUserLoginRes, int) {
-	// 查询用户（预加载角色信息）
-	var user models.SystemUser
-	if err := global.DB.Preload("Role").Where("username = ?", req.Username).First(&user).Error; err != nil {
-		// 记录登录失败日志
-		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "用户名不存在")
-		return nil, res.ErrorCodeLoginFailed
+func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, userAgent string) (*models.SystemUserLoginRes, error) {
+	// 1. 校验验证码
+	if !util.VerifyCaptcha(req.CaptchaId, req.CaptchaCode) {
+		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "验证码错误")
+		return nil, res.NewAppErrorByCode(res.ErrorCodeCaptchaError)
 	}
 
-	// 验证密码
+	// 2. 查询用户（预加载角色信息）
+	var user models.SystemUser
+	err := global.DB.Preload("Role").Where("username = ?", req.Username).First(&user).Error
+
+	// 时序攻击防护：无论用户是否存在，都执行一次固定耗时的密码比较
+	dummyHash := "$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqhmM6JGKpS4G3R1G2JH8YpfB0Bqy"
+	_ = util.BcryptCheck(req.Password, dummyHash)
+
+	if err != nil {
+		// 记录登录失败日志
+		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "用户名不存在")
+		return nil, res.NewAppErrorByCode(res.ErrorCodeLoginFailed)
+	}
+
+	// 3. 检查账户是否被锁定
+	if user.LockedUntil != nil && time.Time(*user.LockedUntil).After(time.Now()) {
+		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "账户已被锁定")
+		return nil, res.NewAppErrorByCode(res.ErrorCodeAccountLocked)
+	}
+
+	// 4. 验证密码
 	if !util.BcryptCheck(req.Password, user.Password) {
 		// 记录登录失败日志
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "密码错误")
-		return nil, res.ErrorCodePasswordError
+		// 增加失败计数并检查是否锁定（使用原子操作防止并发覆盖）
+		s.handleLoginFailure(user.ID, user.Username)
+		return nil, res.NewAppErrorByCode(res.ErrorCodePasswordError)
 	}
 
-	// 检查用户状态
+	// 5. 检查用户状态
 	if user.Status != 1 {
 		// 记录登录失败日志
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "用户已被禁用")
-		return nil, res.ErrorCodeUserDisabled
+		return nil, res.NewAppErrorByCode(res.ErrorCodeUserDisabled)
 	}
 
-	// 生成token
+	// 6. 登录成功：重置失败计数和锁定状态
+	if user.LoginFailCount > 0 || user.LockedUntil != nil {
+		global.DB.Model(&user).Updates(map[string]interface{}{
+			"login_fail_count": 0,
+			"locked_until":     nil,
+		})
+	}
+
+	// 7. 生成token
 	j := util.NewJWT()
 	claims := j.CreateClaims(util.CustomClaims{
-		UserID:   user.ID,
-		Username: user.Username,
-		RoleID:   user.RoleID,
+		UserID:          user.ID,
+		Username:        user.Username,
+		RoleID:          user.RoleID,
+		PasswordVersion: user.PasswordVersion,
 	})
 	token, err := j.CreateToken(claims)
 	if err != nil {
-		return nil, res.ErrorCodeInternalServer
+		return nil, res.NewAppErrorWithErr(res.ErrorCodeInternalServer, res.GetErrorMsg(res.ErrorCodeInternalServer), err)
 	}
 
-	// 更新登录信息
+	// 8. 更新登录信息
 	now := time.Now().Format("2006-01-02 15:04:05")
 	if err := global.DB.Model(&user).Updates(map[string]interface{}{
 		"last_login_ip": clientIP,
@@ -195,7 +234,33 @@ func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, user
 		Token:     token,
 		ExpiresAt: claims.ExpiresAt.Unix(),
 		UserInfo:  user,
-	}, res.SuccessCode
+	}, nil
+}
+
+// handleLoginFailure 处理登录失败，增加失败计数并可能锁定账户
+func (s *SystemUserService) handleLoginFailure(userID uint, username string) {
+	// 使用数据库原子操作增加失败计数，防止并发覆盖
+	if err := global.DB.Model(&models.SystemUser{}).Where("id = ?", userID).UpdateColumn("login_fail_count", gorm.Expr("login_fail_count + ?", 1)).Error; err != nil {
+		global.Log.Errorf("更新登录失败计数失败: %v", err)
+		return
+	}
+
+	// 重新查询最新的失败计数
+	var updatedUser models.SystemUser
+	if err := global.DB.Select("login_fail_count").First(&updatedUser, userID).Error; err != nil {
+		global.Log.Errorf("查询最新登录失败计数失败: %v", err)
+		return
+	}
+
+	// 如果连续失败达到5次，锁定账户30分钟
+	if updatedUser.LoginFailCount >= 5 {
+		lockedUntil := models.LocalTime(time.Now().Add(30 * time.Minute))
+		if err := global.DB.Model(&models.SystemUser{}).Where("id = ?", userID).Update("locked_until", lockedUntil).Error; err != nil {
+			global.Log.Errorf("锁定账户失败: %v", err)
+			return
+		}
+		global.Log.Warnf("用户[%s]连续登录失败%d次，账户已锁定30分钟", username, updatedUser.LoginFailCount)
+	}
 }
 
 // recordLoginLog 记录登录日志
@@ -232,7 +297,7 @@ func (s *SystemUserService) recordLoginLog(username, ip, userAgent string, statu
 }
 
 // 登录日志通道
-var loginLogChan = make(chan models.LoginLog, 100)
+var loginLogChan = make(chan models.LoginLog, 500)
 
 func init() {
 	// 启动登录日志工作协程
@@ -259,11 +324,11 @@ func (s *SystemUserService) GetUserInfo(userID uint) (*models.SystemUser, error)
 }
 
 // GetAsyncRoutes 获取当前用户的动态路由菜单
-func (s *SystemUserService) GetAsyncRoutes(userID uint) ([]map[string]interface{}, int) {
+func (s *SystemUserService) GetAsyncRoutes(userID uint) ([]map[string]interface{}, error) {
 	// 查询用户信息及角色
 	user, err := s.GetUserByID(userID)
 	if err != nil {
-		return nil, res.ErrorCodeUserNotExist
+		return nil, res.NewAppErrorByCode(res.ErrorCodeUserNotExist)
 	}
 
 	// 查询角色的菜单权限（所有角色都根据权限表查询，包括超级管理员）
@@ -278,7 +343,7 @@ func (s *SystemUserService) GetAsyncRoutes(userID uint) ([]map[string]interface{
 	// 转换为前端路由格式
 	routes := s.buildRoutesFromMenus(menus, user.Role.RoleCode)
 
-	return routes, res.SuccessCode
+	return routes, nil
 }
 
 // getMenusWithParents 获取菜单及其所有父级目录
@@ -525,11 +590,23 @@ func (s *SystemUserService) UpdateCurrentUser(userID uint, req *models.SystemUse
 
 	updates := map[string]interface{}{}
 
-	// 空字符串也是有效输入，表示清空字段
-	updates["nickname"] = req.Nickname
-	updates["avatar"] = req.Avatar
-	updates["phone"] = req.Phone
-	updates["email"] = req.Email
+	// 仅更新客户端明确传入的字段（指针非 nil 表示传入）
+	if req.Nickname != nil {
+		updates["nickname"] = *req.Nickname
+	}
+	if req.Avatar != nil {
+		updates["avatar"] = *req.Avatar
+	}
+	if req.Phone != nil {
+		updates["phone"] = *req.Phone
+	}
+	if req.Email != nil {
+		updates["email"] = *req.Email
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
 
 	return global.DB.Model(&user).Updates(updates).Error
 }
@@ -546,8 +623,11 @@ func (s *SystemUserService) UpdateCurrentUserPassword(userID uint, oldPassword, 
 		return errors.New("原密码不正确")
 	}
 
-	// 更新密码
-	return global.DB.Model(&user).Update("password", util.BcryptHash(newPassword)).Error
+	// 更新密码并递增密码版本号（使旧 Token 失效）
+	return global.DB.Model(&user).Updates(map[string]interface{}{
+		"password":         util.BcryptHash(newPassword),
+		"password_version": gorm.Expr("password_version + ?", 1),
+	}).Error
 }
 
 // ==================== 内部辅助方法 ====================

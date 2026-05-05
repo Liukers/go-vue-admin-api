@@ -24,8 +24,17 @@ func CasbinAuth() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		method := c.Request.Method
 
+		// 安全的类型断言
+		roleIdUint, ok := roleId.(uint)
+		if !ok {
+			global.Log.Errorf("roleId 类型断言失败: %T", roleId)
+			res.Fail(c, res.ErrorCodeForbidden)
+			c.Abort()
+			return
+		}
+
 		// 构建角色key
-		roleKey := fmt.Sprintf("role_%d", roleId.(uint))
+		roleKey := fmt.Sprintf("role_%d", roleIdUint)
 
 		// 使用Casbin检查权限
 		success, err := global.Casbin.Enforce(roleKey, path, method)
@@ -55,7 +64,13 @@ func CheckPermission(c *gin.Context, perm string) bool {
 		return false
 	}
 
-	roleKey := fmt.Sprintf("role_%d", roleId.(uint))
+	roleIdUint, ok := roleId.(uint)
+	if !ok {
+		global.Log.Errorf("roleId 类型断言失败: %T", roleId)
+		return false
+	}
+
+	roleKey := fmt.Sprintf("role_%d", roleIdUint)
 	success, err := global.Casbin.Enforce(roleKey, perm, "*")
 	if err != nil {
 		global.Log.Errorf("Casbin权限检查失败: %v", err)

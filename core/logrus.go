@@ -1,13 +1,106 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path"
+	"sync"
 	"time"
 	"go-vue-admin/global"
 
 	"github.com/sirupsen/logrus"
 )
+
+// rotateWriter 支持按天轮转的日志写入器
+type rotateWriter struct {
+	mu         sync.Mutex
+	dir        string
+	file       *os.File
+	currentDay string
+	stdout     *os.File
+	enableConsole bool
+}
+
+// newRotateWriter 创建轮转写入器
+func newRotateWriter(dir string, enableConsole bool) (*rotateWriter, error) {
+	rw := &rotateWriter{
+		dir:           dir,
+		stdout:        os.Stdout,
+		enableConsole: enableConsole,
+	}
+	if err := rw.rotate(); err != nil {
+		return nil, err
+	}
+	return rw, nil
+}
+
+// rotate 切换日志文件（按天）
+func (w *rotateWriter) rotate() error {
+	day := time.Now().Format("2006-01-02")
+	if w.currentDay == day && w.file != nil {
+		return nil
+	}
+
+	// 关闭旧文件
+	if w.file != nil {
+		_ = w.file.Close()
+	}
+
+	// 创建日志目录
+	if _, err := os.Stat(w.dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(w.dir, 0750); err != nil {
+			return fmt.Errorf("创建日志目录失败: %w", err)
+		}
+	}
+
+	// 打开新日志文件
+	logPath := path.Join(w.dir, day+".log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
+	if err != nil {
+		return fmt.Errorf("打开日志文件失败: %w", err)
+	}
+
+	w.file = file
+	w.currentDay = day
+	return nil
+}
+
+// Write 实现 io.Writer 接口
+func (w *rotateWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// 检查是否需要切换文件
+	if err := w.rotate(); err != nil {
+		// 如果切换失败，尝试写入控制台
+		if w.enableConsole && w.stdout != nil {
+			return w.stdout.Write(p)
+		}
+		return 0, err
+	}
+
+	// 写入文件
+	if w.file != nil {
+		w.file.Write(p)
+	}
+
+	// 同时写入控制台
+	if w.enableConsole && w.stdout != nil {
+		return w.stdout.Write(p)
+	}
+
+	return len(p), nil
+}
+
+// Close 关闭写入器
+func (w *rotateWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file != nil {
+		return w.file.Close()
+	}
+	return nil
+}
 
 func InitLogrus() *logrus.Logger {
 	m := global.Config.Zap
@@ -34,39 +127,16 @@ func InitLogrus() *logrus.Logger {
 		})
 	}
 
-	// 创建日志目录（使用更安全的权限）
-	if _, err := os.Stat(m.Director); os.IsNotExist(err) {
-		// 使用0750权限，只允许所有者和组访问
-		os.MkdirAll(m.Director, 0750)
-	}
-
-	// 打开日志文件（使用更安全的权限0640）
-	logPath := path.Join(m.Director, time.Now().Format("2006-01-02")+".log")
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
+	// 创建轮转写入器
+	writer, err := newRotateWriter(m.Director, m.LogInConsole)
 	if err != nil {
-		logger.Error("打开日志文件失败: ", err)
-	}
-
-	// 设置输出
-	if m.LogInConsole {
-		logger.SetOutput(&dualWriter{
-			file:   file,
-			stdout: os.Stdout,
-		})
+		logger.Errorf("创建日志写入器失败: %v", err)
+		// 降级到仅控制台输出
+		logger.SetOutput(os.Stdout)
 	} else {
-		logger.SetOutput(file)
+		logger.SetOutput(writer)
 	}
 
 	global.Log = logger
 	return logger
-}
-
-type dualWriter struct {
-	file   *os.File
-	stdout *os.File
-}
-
-func (w *dualWriter) Write(p []byte) (n int, err error) {
-	w.file.Write(p)
-	return w.stdout.Write(p)
 }

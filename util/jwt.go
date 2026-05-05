@@ -10,9 +10,10 @@ import (
 
 // CustomClaims 自定义声明结构体并内嵌jwt.RegisteredClaims
 type CustomClaims struct {
-	UserID   uint   `json:"userId"`
-	Username string `json:"username"`
-	RoleID   uint   `json:"roleId"`
+	UserID          uint   `json:"userId"`
+	Username        string `json:"username"`
+	RoleID          uint   `json:"roleId"`
+	PasswordVersion int    `json:"passwordVersion"`
 	jwt.RegisteredClaims
 }
 
@@ -43,9 +44,10 @@ func (j *JWT) CreateToken(claims CustomClaims) (string, error) {
 func (j *JWT) CreateClaims(baseClaims CustomClaims) CustomClaims {
 	expiresTime := time.Duration(global.Config.JWT.ExpiresTime) * time.Hour
 	claims := CustomClaims{
-		UserID:   baseClaims.UserID,
-		Username: baseClaims.Username,
-		RoleID:   baseClaims.RoleID,
+		UserID:          baseClaims.UserID,
+		Username:        baseClaims.Username,
+		RoleID:          baseClaims.RoleID,
+		PasswordVersion: baseClaims.PasswordVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiresTime)),
 			Issuer:    global.Config.JWT.Issuer,
@@ -88,13 +90,27 @@ func (j *JWT) RefreshToken(tokenString string) (string, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return j.SigningKey, nil
 	})
-	
+
 	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			token, parseErr := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+				return j.SigningKey, nil
+			}, jwt.WithoutClaimsValidation())
+			if parseErr != nil {
+				return "", parseErr
+			}
+			if claims, ok := token.Claims.(*CustomClaims); ok {
+				claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(global.Config.JWT.ExpiresTime) * time.Hour))
+				claims.RegisteredClaims.NotBefore = jwt.NewNumericDate(time.Now())
+				return j.CreateToken(*claims)
+			}
+		}
 		return "", err
 	}
-	
+
 	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
 		claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(global.Config.JWT.ExpiresTime) * time.Hour))
+		claims.RegisteredClaims.NotBefore = jwt.NewNumericDate(time.Now())
 		return j.CreateToken(*claims)
 	}
 	return "", TokenInvalid

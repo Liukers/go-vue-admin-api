@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"go-vue-admin/global"
 	"go-vue-admin/models"
@@ -10,6 +12,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+var tokenRefreshLocks sync.Map
+
+// tryLockRefresh 尝试获取刷新锁，防止同一用户并发刷新产生多个新 token
+func tryLockRefresh(userID uint) bool {
+	key := fmt.Sprintf("refresh:%d", userID)
+	now := time.Now()
+	if val, ok := tokenRefreshLocks.Load(key); ok {
+		if lockUntil := val.(time.Time); now.Before(lockUntil) {
+			return false
+		}
+	}
+	tokenRefreshLocks.Store(key, now.Add(10*time.Second))
+	return true
+}
 
 // JWTAuth JWT认证中间件
 // 支持Token自动刷新，刷新后的旧Token会被加入黑名单
@@ -46,20 +63,36 @@ func JWTAuth() gin.HandlerFunc {
 			return
 		}
 
+		// 校验密码版本号（修改密码后旧 token 失效）
+		var currentUser models.SystemUser
+		if err := global.DB.Select("password_version").First(&currentUser, claims.UserID).Error; err != nil {
+			res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "用户不存在")
+			c.Abort()
+			return
+		}
+		if currentUser.PasswordVersion != claims.PasswordVersion {
+			res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "密码已修改，请重新登录")
+			c.Abort()
+			return
+		}
+
 		// 检查是否需要刷新token（在过期前1小时内）
 		if claims.ExpiresAt != nil {
 			bufferTime := time.Duration(global.Config.JWT.BufferTime) * time.Hour
 			if time.Until(claims.ExpiresAt.Time) < bufferTime {
-				// 刷新token
-				newToken, err := j.RefreshToken(tokenString)
-				if err == nil {
-					c.Header("X-Refresh-Token", newToken)
-					global.Log.Infof("用户[%s]的token已自动刷新", claims.Username)
-					
-					// 将旧token加入黑名单，防止重用攻击
-					tb := &TokenBlacklist{}
-					if err := tb.AddToBlacklist(tokenString, claims.ExpiresAt.Time); err != nil {
-						global.Log.Errorf("将旧token加入黑名单失败: %v", err)
+				// 使用锁防止并发刷新产生多个新 token
+				if tryLockRefresh(claims.UserID) {
+					// 刷新token
+					newToken, err := j.RefreshToken(tokenString)
+					if err == nil {
+						c.Header("X-Refresh-Token", newToken)
+						global.Log.Infof("用户[%s]的token已自动刷新", claims.Username)
+						
+						// 将旧token加入黑名单，防止重用攻击
+						tb := &TokenBlacklist{}
+						if err := tb.AddToBlacklist(tokenString, claims.ExpiresAt.Time); err != nil {
+							global.Log.Errorf("将旧token加入黑名单失败: %v", err)
+						}
 					}
 				}
 			}

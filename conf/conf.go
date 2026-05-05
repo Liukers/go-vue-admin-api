@@ -22,6 +22,7 @@ type System struct {
 	Mode         string `mapstructure:"mode" json:"mode" yaml:"mode"`
 	DbType       string `mapstructure:"db-type" json:"db-type" yaml:"db-type"`
 	CasbinConfig string `mapstructure:"casbin-config" json:"casbin-config" yaml:"casbin-config"`
+	TrustProxy   bool   `mapstructure:"trust-proxy" json:"trust-proxy" yaml:"trust-proxy"`
 }
 
 type Mysql struct {

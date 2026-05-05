@@ -9,6 +9,7 @@ type ApiGroup struct {
 	SystemRoleApi
 	SystemLogApi
 	SystemSettingApi
+	SystemCaptchaApi
 }
 
 var (

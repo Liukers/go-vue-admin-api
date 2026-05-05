@@ -59,12 +59,42 @@ func FailWithData(c *gin.Context, code int, data interface{}) {
 	})
 }
 
-// Error 错误响应
+// Error 错误响应（内部错误，不暴露详细信息给客户端）
 func Error(c *gin.Context, err error) {
 	global.Log.Error("请求处理失败: ", err)
+	// 检查是否为 AppError
+	if appErr, ok := err.(*AppError); ok {
+		c.JSON(http.StatusOK, Response{
+			Code:    appErr.Code,
+			Message: appErr.Message,
+			Data:    nil,
+		})
+		return
+	}
+	// 普通错误不暴露内部信息
 	c.JSON(http.StatusOK, Response{
 		Code:    ErrorCodeInternalServer,
-		Message: err.Error(),
+		Message: ErrorMsgInternalServer,
+		Data:    nil,
+	})
+}
+
+// ErrorWithMessage 错误响应（自定义消息，用于兼容旧代码）
+func ErrorWithMessage(c *gin.Context, err error) {
+	global.Log.Error("请求处理失败: ", err)
+	// 检查是否为 AppError
+	if appErr, ok := err.(*AppError); ok {
+		c.JSON(http.StatusOK, Response{
+			Code:    appErr.Code,
+			Message: appErr.Message,
+			Data:    nil,
+		})
+		return
+	}
+	// 普通错误不暴露内部信息
+	c.JSON(http.StatusOK, Response{
+		Code:    ErrorCodeInternalServer,
+		Message: ErrorMsgInternalServer,
 		Data:    nil,
 	})
 }
