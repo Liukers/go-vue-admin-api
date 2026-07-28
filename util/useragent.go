@@ -10,9 +10,7 @@ func ParseUserAgent(userAgent string) (browser, os string) {
 		return "Unknown", "Unknown"
 	}
 
-	// 解析浏览器
 	browser = parseBrowser(userAgent)
-	// 解析操作系统
 	os = parseOS(userAgent)
 
 	return browser, os
@@ -22,42 +20,36 @@ func ParseUserAgent(userAgent string) (browser, os string) {
 func parseBrowser(userAgent string) string {
 	userAgent = strings.ToLower(userAgent)
 
-	// Edge (Chromium based)
 	if strings.Contains(userAgent, "edg/") || strings.Contains(userAgent, "edge/") {
 		return "Microsoft Edge"
 	}
 
-	// Chrome (需要在 Safari 之前检查，因为 Chrome 也包含 Safari)
+	// Chrome 需要在 Safari 之前检查，因为 Chrome 也包含 Safari
 	if strings.Contains(userAgent, "chrome/") && !strings.Contains(userAgent, "chromium/") {
 		return "Chrome"
 	}
 
-	// Firefox
 	if strings.Contains(userAgent, "firefox/") {
 		return "Firefox"
 	}
 
-	// Safari (需要在 Chrome 之后检查)
+	// Safari 需要在 Chrome 之后检查
 	if strings.Contains(userAgent, "safari/") && !strings.Contains(userAgent, "chrome/") {
 		return "Safari"
 	}
 
-	// Opera
 	if strings.Contains(userAgent, "opr/") || strings.Contains(userAgent, "opera/") {
 		return "Opera"
 	}
 
-	// IE
 	if strings.Contains(userAgent, "trident/") || strings.Contains(userAgent, "msie ") {
 		return "Internet Explorer"
 	}
 
-	// WeChat
 	if strings.Contains(userAgent, "micromessenger/") {
 		return "WeChat"
 	}
 
-	// Mobile browsers
 	if strings.Contains(userAgent, "mobile/") {
 		return "Mobile Browser"
 	}
@@ -69,7 +61,6 @@ func parseBrowser(userAgent string) string {
 func parseOS(userAgent string) string {
 	userAgent = strings.ToLower(userAgent)
 
-	// Windows
 	if strings.Contains(userAgent, "windows nt 10.0") {
 		return "Windows 10/11"
 	}
@@ -86,12 +77,10 @@ func parseOS(userAgent string) string {
 		return "Windows"
 	}
 
-	// macOS
 	if strings.Contains(userAgent, "macintosh") || strings.Contains(userAgent, "mac os x") {
 		return "macOS"
 	}
 
-	// iOS
 	if strings.Contains(userAgent, "iphone") {
 		return "iOS (iPhone)"
 	}
@@ -99,17 +88,14 @@ func parseOS(userAgent string) string {
 		return "iOS (iPad)"
 	}
 
-	// Android
 	if strings.Contains(userAgent, "android") {
 		return "Android"
 	}
 
-	// Linux
 	if strings.Contains(userAgent, "linux") {
 		return "Linux"
 	}
 
-	// Ubuntu
 	if strings.Contains(userAgent, "ubuntu") {
 		return "Ubuntu"
 	}
@@ -119,12 +105,10 @@ func parseOS(userAgent string) string {
 
 // GetIPLocation 根据 IP 获取地理位置（简化版）
 func GetIPLocation(ip string) string {
-	// 本地地址
 	if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
 		return "本机地址"
 	}
 
-	// 内网地址
 	if strings.HasPrefix(ip, "192.168.") ||
 		strings.HasPrefix(ip, "10.") ||
 		strings.HasPrefix(ip, "172.16.") ||

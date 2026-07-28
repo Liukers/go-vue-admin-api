@@ -38,6 +38,9 @@ logs/
 .env.local
 .env.*.local
 
+# 本地配置（含数据库密码/JWT密钥等敏感信息，模板见 setting.example.yaml）
+setting.yaml
+
 # Temp
 *.tmp
 *.temp

@@ -20,6 +20,7 @@ type SystemUser struct {
 	LockedUntil    *LocalTime `gorm:"column:locked_until;type:datetime;default:null;comment:账户锁定截止时间" json:"-"`
 	PasswordVersion int       `gorm:"column:password_version;type:int;default:0;comment:密码版本号，修改密码后递增" json:"-"`
 	Roles          []string   `gorm:"-" json:"roles"` // 前端需要的角色数组格式
+	Perms          []string   `gorm:"-" json:"perms"` // 前端需要的按钮/接口权限标识数组
 }
 
 func (SystemUser) TableName() string {

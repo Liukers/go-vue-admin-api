@@ -3,7 +3,7 @@ package util
 import (
 	"errors"
 	"time"
-	"go-vue-admin/global"
+	"go-vue-admin/conf"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -30,7 +30,7 @@ var (
 
 func NewJWT() *JWT {
 	return &JWT{
-		SigningKey: []byte(global.Config.JWT.SigningKey),
+		SigningKey: []byte(conf.GetConfig().JWT.SigningKey),
 	}
 }
 
@@ -42,7 +42,7 @@ func (j *JWT) CreateToken(claims CustomClaims) (string, error) {
 
 // CreateClaims 创建Claims
 func (j *JWT) CreateClaims(baseClaims CustomClaims) CustomClaims {
-	expiresTime := time.Duration(global.Config.JWT.ExpiresTime) * time.Hour
+	expiresTime := time.Duration(conf.GetConfig().JWT.ExpiresTime) * time.Hour
 	claims := CustomClaims{
 		UserID:          baseClaims.UserID,
 		Username:        baseClaims.Username,
@@ -50,7 +50,7 @@ func (j *JWT) CreateClaims(baseClaims CustomClaims) CustomClaims {
 		PasswordVersion: baseClaims.PasswordVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiresTime)),
-			Issuer:    global.Config.JWT.Issuer,
+			Issuer:    conf.GetConfig().JWT.Issuer,
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -61,10 +61,9 @@ func (j *JWT) CreateClaims(baseClaims CustomClaims) CustomClaims {
 func (j *JWT) ParseToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return j.SigningKey, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	
 	if err != nil {
-		// 处理不同类型的错误
 		switch {
 		case errors.Is(err, jwt.ErrTokenMalformed):
 			return nil, TokenMalformed
@@ -85,22 +84,40 @@ func (j *JWT) ParseToken(tokenString string) (*CustomClaims, error) {
 	return nil, TokenInvalid
 }
 
+// RefreshGracePeriod token过期后仍允许刷新的最大宽限期
+const RefreshGracePeriod = 24 * time.Hour
+
+// ParseTokenIgnoreExpiry 解析token（校验签名，但忽略过期时间等claims校验，用于刷新宽限场景）
+func (j *JWT) ParseTokenIgnoreExpiry(tokenString string) (*CustomClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return j.SigningKey, nil
+	}, jwt.WithoutClaimsValidation(), jwt.WithValidMethods([]string{"HS256"}))
+
+	if err != nil {
+		return nil, TokenInvalid
+	}
+	if claims, ok := token.Claims.(*CustomClaims); ok {
+		return claims, nil
+	}
+	return nil, TokenInvalid
+}
+
 // RefreshToken 更新token
 func (j *JWT) RefreshToken(tokenString string) (string, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return j.SigningKey, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			token, parseErr := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 				return j.SigningKey, nil
-			}, jwt.WithoutClaimsValidation())
+			}, jwt.WithoutClaimsValidation(), jwt.WithValidMethods([]string{"HS256"}))
 			if parseErr != nil {
 				return "", parseErr
 			}
 			if claims, ok := token.Claims.(*CustomClaims); ok {
-				claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(global.Config.JWT.ExpiresTime) * time.Hour))
+				claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(conf.GetConfig().JWT.ExpiresTime) * time.Hour))
 				claims.RegisteredClaims.NotBefore = jwt.NewNumericDate(time.Now())
 				return j.CreateToken(*claims)
 			}
@@ -109,7 +126,7 @@ func (j *JWT) RefreshToken(tokenString string) (string, error) {
 	}
 
 	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
-		claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(global.Config.JWT.ExpiresTime) * time.Hour))
+		claims.RegisteredClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(conf.GetConfig().JWT.ExpiresTime) * time.Hour))
 		claims.RegisteredClaims.NotBefore = jwt.NewNumericDate(time.Now())
 		return j.CreateToken(*claims)
 	}

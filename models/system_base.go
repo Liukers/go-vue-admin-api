@@ -27,11 +27,9 @@ func (t *LocalTime) UnmarshalJSON(data []byte) error {
 		*t = LocalTime{}
 		return nil
 	}
-	// 去掉引号
 	if len(str) > 1 && str[0] == '"' && str[len(str)-1] == '"' {
 		str = str[1 : len(str)-1]
 	}
-	// 尝试解析多种时间格式
 	layouts := []string{
 		TimeFormat,
 		time.RFC3339,

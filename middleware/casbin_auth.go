@@ -55,27 +55,3 @@ func CasbinAuth() gin.HandlerFunc {
 		c.Next()
 	}
 }
-
-// CasbinAuthWithPerm 指定权限标识的Casbin权限检查
-// 用于在控制器内部进行细粒度权限控制
-func CheckPermission(c *gin.Context, perm string) bool {
-	roleId, exists := c.Get("roleId")
-	if !exists {
-		return false
-	}
-
-	roleIdUint, ok := roleId.(uint)
-	if !ok {
-		global.Log.Errorf("roleId 类型断言失败: %T", roleId)
-		return false
-	}
-
-	roleKey := fmt.Sprintf("role_%d", roleIdUint)
-	success, err := global.Casbin.Enforce(roleKey, perm, "*")
-	if err != nil {
-		global.Log.Errorf("Casbin权限检查失败: %v", err)
-		return false
-	}
-
-	return success
-}

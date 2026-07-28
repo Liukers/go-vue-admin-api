@@ -6,6 +6,7 @@ import (
 	"go-vue-admin/models"
 	"go-vue-admin/models/res"
 	"go-vue-admin/util"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -51,11 +52,14 @@ func (s *SystemUserService) CheckUserExistExceptID(username string, excludeID ui
 
 // CreateUser 创建用户
 func (s *SystemUserService) CreateUser(req *models.SystemUserReq) (uint, error) {
-	// 校验角色是否存在
 	if req.RoleID > 0 {
 		var role models.SystemRole
 		if err := global.DB.First(&role, req.RoleID).Error; err != nil {
 			return 0, res.NewAppErrorByCode(res.ErrorCodeNotFound)
+		}
+		// 禁止通过接口创建超级管理员（admin 角色只能由系统初始化分配）
+		if role.RoleCode == "admin" {
+			return 0, res.NewAppError(res.ErrorCodeBusinessError, "不能创建超级管理员用户")
 		}
 	}
 
@@ -92,16 +96,25 @@ func (s *SystemUserService) UpdateUser(req *models.SystemUserUpdateReq) error {
 	if req.Phone != "" {
 		updates["phone"] = req.Phone
 	}
-	// 使用指针类型或特殊值来判断是否更新Status
+	// Status 用特殊值（1/2）判断是否更新，0 值视为不更新
 	if req.Status == 1 || req.Status == 2 {
 		updates["status"] = req.Status
 	}
 	if req.RoleID != 0 {
+		// 校验角色并禁止将普通用户提升为超级管理员（admin 角色只能由系统初始化分配）
+		var newRole models.SystemRole
+		if err := global.DB.First(&newRole, req.RoleID).Error; err != nil {
+			return res.NewAppErrorByCode(res.ErrorCodeNotFound)
+		}
+		if newRole.RoleCode == "admin" && user.RoleID != req.RoleID {
+			return res.NewAppError(res.ErrorCodeBusinessError, "不能将普通用户提升为超级管理员")
+		}
 		updates["role_id"] = req.RoleID
 	}
-	// 管理员更新密码 - 注意：这应该在单独的管理员重置密码接口中处理
+	// 管理员修改用户密码：同步递增密码版本号，使该用户已签发的 token 全部失效
 	if req.Password != "" {
 		updates["password"] = util.BcryptHash(req.Password)
+		updates["password_version"] = gorm.Expr("password_version + 1")
 	}
 
 	if len(updates) == 0 {
@@ -131,14 +144,12 @@ func (s *SystemUserService) GetUserList(page, pageSize int, keyword, status stri
 		db = db.Where("status = ?", util.StringToInt(status))
 	}
 
-	// 检查Count错误
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	
+
 	err := db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&users).Error
 
-	// 隐藏密码
 	for i := range users {
 		users[i].Password = ""
 	}
@@ -150,49 +161,49 @@ func (s *SystemUserService) GetUserList(page, pageSize int, keyword, status stri
 
 // Login 用户登录
 func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, userAgent string) (*models.SystemUserLoginRes, error) {
-	// 1. 校验验证码
 	if !util.VerifyCaptcha(req.CaptchaId, req.CaptchaCode) {
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "验证码错误")
 		return nil, res.NewAppErrorByCode(res.ErrorCodeCaptchaError)
 	}
 
-	// 2. 查询用户（预加载角色信息）
 	var user models.SystemUser
 	err := global.DB.Preload("Role").Where("username = ?", req.Username).First(&user).Error
-
-	// 时序攻击防护：无论用户是否存在，都执行一次固定耗时的密码比较
-	dummyHash := "$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqhmM6JGKpS4G3R1G2JH8YpfB0Bqy"
-	_ = util.BcryptCheck(req.Password, dummyHash)
-
 	if err != nil {
-		// 记录登录失败日志
+		// 时序攻击防护：仅在用户不存在时执行一次虚拟 bcrypt 比较，
+		// 使"用户不存在"与"密码错误"两条路径各执行一次 bcrypt、耗时一致，
+		// 避免通过响应时间枚举有效用户名
+		dummyHash := "$2a$10$N9qo8uLOickgx2ZMRZoMy.MqrqhmM6JGKpS4G3R1G2JH8YpfB0Bqy"
+		_ = util.BcryptCheck(req.Password, dummyHash)
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "用户名不存在")
 		return nil, res.NewAppErrorByCode(res.ErrorCodeLoginFailed)
 	}
 
-	// 3. 检查账户是否被锁定
-	if user.LockedUntil != nil && time.Time(*user.LockedUntil).After(time.Now()) {
-		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "账户已被锁定")
-		return nil, res.NewAppErrorByCode(res.ErrorCodeAccountLocked)
-	}
-
-	// 4. 验证密码
-	if !util.BcryptCheck(req.Password, user.Password) {
-		// 记录登录失败日志
+	// 锁定期内密码正确仍可登录并解除锁定（防止攻击者用错误密码把合法用户长期锁定形成DoS）；
+	// 密码错误则维持锁定（不增加计数、不延长锁定时间）
+	locked := user.LockedUntil != nil && time.Time(*user.LockedUntil).After(time.Now())
+	if locked {
+		if !util.BcryptCheck(req.Password, user.Password) {
+			s.recordLoginLog(req.Username, clientIP, userAgent, 2, "账户已被锁定")
+			return nil, res.NewAppErrorByCode(res.ErrorCodeAccountLocked)
+		}
+		// 密码正确：解除锁定
+		global.DB.Model(&user).Updates(map[string]interface{}{
+			"login_fail_count": 0,
+			"locked_until":     nil,
+		})
+		global.Log.Infof("用户[%s]在锁定期内使用正确密码登录，锁定已解除", user.Username)
+	} else if !util.BcryptCheck(req.Password, user.Password) {
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "密码错误")
 		// 增加失败计数并检查是否锁定（使用原子操作防止并发覆盖）
 		s.handleLoginFailure(user.ID, user.Username)
 		return nil, res.NewAppErrorByCode(res.ErrorCodePasswordError)
 	}
 
-	// 5. 检查用户状态
 	if user.Status != 1 {
-		// 记录登录失败日志
 		s.recordLoginLog(req.Username, clientIP, userAgent, 2, "用户已被禁用")
 		return nil, res.NewAppErrorByCode(res.ErrorCodeUserDisabled)
 	}
 
-	// 6. 登录成功：重置失败计数和锁定状态
 	if user.LoginFailCount > 0 || user.LockedUntil != nil {
 		global.DB.Model(&user).Updates(map[string]interface{}{
 			"login_fail_count": 0,
@@ -200,7 +211,6 @@ func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, user
 		})
 	}
 
-	// 7. 生成token
 	j := util.NewJWT()
 	claims := j.CreateClaims(util.CustomClaims{
 		UserID:          user.ID,
@@ -213,7 +223,6 @@ func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, user
 		return nil, res.NewAppErrorWithErr(res.ErrorCodeInternalServer, res.GetErrorMsg(res.ErrorCodeInternalServer), err)
 	}
 
-	// 8. 更新登录信息
 	now := time.Now().Format("2006-01-02 15:04:05")
 	if err := global.DB.Model(&user).Updates(map[string]interface{}{
 		"last_login_ip": clientIP,
@@ -222,19 +231,36 @@ func (s *SystemUserService) Login(req *models.SystemUserLoginReq, clientIP, user
 		global.Log.Errorf("更新登录信息失败: %v", err)
 	}
 
-	// 记录登录成功日志
 	s.recordLoginLog(user.Username, clientIP, userAgent, 1, "登录成功")
 
-	// 隐藏密码
 	user.Password = ""
 	// 设置前端需要的 roles 字段
 	user.Roles = []string{user.Role.RoleCode}
+	// 设置前端需要的按钮权限标识
+	user.Perms = s.getUserPerms(&user)
 
 	return &models.SystemUserLoginRes{
 		Token:     token,
 		ExpiresAt: claims.ExpiresAt.Unix(),
 		UserInfo:  user,
 	}, nil
+}
+
+// getUserPerms 获取用户的按钮/接口权限标识列表
+// admin 返回通配 ["*:*:*"]；其余角色取其启用菜单/按钮上的 perm 标识（Distinct 去重）
+func (s *SystemUserService) getUserPerms(user *models.SystemUser) []string {
+	if user.Role.RoleCode == "admin" {
+		return []string{"*:*:*"}
+	}
+	perms := []string{}
+	if err := global.DB.Model(&models.SystemMenu{}).
+		Joins("JOIN system_role_menu ON system_role_menu.menu_id = system_menu.id").
+		Where("system_role_menu.role_id = ? AND system_menu.status = ? AND system_menu.perm != ''", user.RoleID, 1).
+		Distinct().
+		Pluck("system_menu.perm", &perms).Error; err != nil {
+		global.Log.Errorf("查询用户[%d]的权限标识失败: %v", user.ID, err)
+	}
+	return perms
 }
 
 // handleLoginFailure 处理登录失败，增加失败计数并可能锁定账户
@@ -245,7 +271,6 @@ func (s *SystemUserService) handleLoginFailure(userID uint, username string) {
 		return
 	}
 
-	// 重新查询最新的失败计数
 	var updatedUser models.SystemUser
 	if err := global.DB.Select("login_fail_count").First(&updatedUser, userID).Error; err != nil {
 		global.Log.Errorf("查询最新登录失败计数失败: %v", err)
@@ -265,15 +290,12 @@ func (s *SystemUserService) handleLoginFailure(userID uint, username string) {
 
 // recordLoginLog 记录登录日志
 func (s *SystemUserService) recordLoginLog(username, ip, userAgent string, status int, message string) {
-	// 检查是否开启登录日志
 	var settingService SystemSettingService
 	if !settingService.IsLoginLogEnabled() {
-		return // 未开启则不记录
+		return
 	}
 
-	// 解析 User-Agent 获取浏览器和操作系统
 	browser, os := util.ParseUserAgent(userAgent)
-	// 获取 IP 地理位置
 	location := util.GetIPLocation(ip)
 
 	log := models.LoginLog{
@@ -289,14 +311,11 @@ func (s *SystemUserService) recordLoginLog(username, ip, userAgent string, statu
 	// 使用日志通道异步记录，防止goroutine泄露
 	select {
 	case loginLogChan <- log:
-		// 成功发送到队列
 	default:
-		// 队列已满，记录警告
 		global.Log.Warn("登录日志队列已满，丢弃日志记录")
 	}
 }
 
-// 登录日志通道
 var loginLogChan = make(chan models.LoginLog, 500)
 
 func init() {
@@ -312,6 +331,14 @@ func init() {
 	}
 }
 
+// WaitLoginLogsFlushed 等待登录日志队列消费完毕（用于优雅停机）
+func WaitLoginLogsFlushed(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for len(loginLogChan) > 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // GetUserInfo 获取当前用户信息
 func (s *SystemUserService) GetUserInfo(userID uint) (*models.SystemUser, error) {
 	user, err := s.GetUserByID(userID)
@@ -320,12 +347,12 @@ func (s *SystemUserService) GetUserInfo(userID uint) (*models.SystemUser, error)
 	}
 	user.Password = ""
 	user.Roles = []string{user.Role.RoleCode}
+	user.Perms = s.getUserPerms(user)
 	return user, nil
 }
 
 // GetAsyncRoutes 获取当前用户的动态路由菜单
 func (s *SystemUserService) GetAsyncRoutes(userID uint) ([]map[string]interface{}, error) {
-	// 查询用户信息及角色
 	user, err := s.GetUserByID(userID)
 	if err != nil {
 		return nil, res.NewAppErrorByCode(res.ErrorCodeUserNotExist)
@@ -337,10 +364,8 @@ func (s *SystemUserService) GetAsyncRoutes(userID uint) ([]map[string]interface{
 		global.Log.Errorf("查询角色菜单权限失败: %v", err)
 	}
 
-	// 查询菜单详情，同时包含所有父级目录
 	menus := s.getMenusWithParents(menuIDs)
 
-	// 转换为前端路由格式
 	routes := s.buildRoutesFromMenus(menus, user.Role.RoleCode)
 
 	return routes, nil
@@ -374,10 +399,18 @@ func (s *SystemUserService) getMenusWithParents(menuIDs []uint) []models.SystemM
 			for _, menu := range logMenus {
 				hiddenMenuIDs = append(hiddenMenuIDs, menu.ID)
 			}
+			// 子级（按钮）也要一并隐藏：
+			// 否则角色拥有的按钮会经父级回溯把已隐藏的菜单重新带入路由
+			if len(hiddenMenuIDs) > 0 {
+				var childIDs []uint
+				global.DB.Model(&models.SystemMenu{}).
+					Where("parent_id IN ?", hiddenMenuIDs).
+					Pluck("id", &childIDs)
+				hiddenMenuIDs = append(hiddenMenuIDs, childIDs...)
+			}
 		}
 	}
 	
-	// 将隐藏的菜单ID从查询列表中移除
 	filteredMenuIDs := make([]uint, 0, len(menuIDs))
 	for _, id := range menuIDs {
 		shouldHide := false
@@ -391,13 +424,11 @@ func (s *SystemUserService) getMenusWithParents(menuIDs []uint) []models.SystemM
 			filteredMenuIDs = append(filteredMenuIDs, id)
 		}
 	}
-	
-	// 使用map去重
+
 	menuMap := make(map[uint]models.SystemMenu)
-	
-	// 当前层级的菜单ID
+
 	currentIDs := filteredMenuIDs
-	
+
 	// 最多循环10层，防止无限循环
 	for i := 0; i < 10 && len(currentIDs) > 0; i++ {
 		var menus []models.SystemMenu
@@ -405,44 +436,36 @@ func (s *SystemUserService) getMenusWithParents(menuIDs []uint) []models.SystemM
 			global.Log.Errorf("查询菜单失败: %v", err)
 			break
 		}
-		
-		// 下一层需要查询的父级ID
+
 		nextIDs := []uint{}
-		
+
 		for _, menu := range menus {
-			// 如果已经存在，跳过
 			if _, exists := menuMap[menu.ID]; exists {
 				continue
 			}
-			
+
 			menuMap[menu.ID] = menu
-			
-			// 如果有父级且父级未被查询过，加入下一层查询
+
 			if menu.ParentID > 0 {
 				if _, exists := menuMap[menu.ParentID]; !exists {
 					nextIDs = append(nextIDs, menu.ParentID)
 				}
 			}
 		}
-		
+
 		currentIDs = nextIDs
 	}
-	
+
 	// 将map转换为slice，并按sort字段排序（保证顺序稳定）
 	result := make([]models.SystemMenu, 0, len(menuMap))
 	for _, menu := range menuMap {
 		result = append(result, menu)
 	}
-	
-	// 按sort字段升序排序
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[i].Sort > result[j].Sort {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
-	
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Sort < result[j].Sort
+	})
+
 	return result
 }
 
@@ -450,10 +473,8 @@ func (s *SystemUserService) getMenusWithParents(menuIDs []uint) []models.SystemM
 func (s *SystemUserService) buildRoutesFromMenus(menus []models.SystemMenu, roleCode string) []map[string]interface{} {
 	var routes []map[string]interface{}
 
-	// 构建菜单树
 	menuTree := s.buildMenuTreeForRoutes(menus, 0)
 
-	// 转换为前端路由格式
 	for _, menu := range menuTree {
 		route := s.menuToRoute(menu, roleCode)
 		if route != nil {
@@ -469,7 +490,6 @@ func (s *SystemUserService) buildMenuTreeForRoutes(menus []models.SystemMenu, pa
 	var tree []map[string]interface{}
 	for _, menu := range menus {
 		if menu.ParentID == parentId {
-			// 只添加启用的菜单
 			if menu.Status != 1 {
 				continue
 			}
@@ -527,7 +547,6 @@ func (s *SystemUserService) menuToRoute(menu map[string]interface{}, roleCode st
 	icon, _ := menu["icon"].(string)
 	component, _ := menu["component"].(string)
 
-	// 构建meta
 	meta := map[string]interface{}{
 		"title": menuName,
 		"icon":  icon,
@@ -536,10 +555,8 @@ func (s *SystemUserService) menuToRoute(menu map[string]interface{}, roleCode st
 	// 目录和菜单都显示在侧边栏
 	meta["showLink"] = true
 
-	// 添加角色权限（当前用户的角色）
 	meta["roles"] = []string{roleCode}
 
-	// 构建路由
 	route := map[string]interface{}{
 		"path": path,
 		"meta": meta,
@@ -552,12 +569,10 @@ func (s *SystemUserService) menuToRoute(menu map[string]interface{}, roleCode st
 		route["name"] = menuName
 	}
 
-	// 设置组件
 	if component != "" {
 		route["component"] = component
 	}
 
-	// 处理子路由
 	if children, ok := menu["children"].([]map[string]interface{}); ok && len(children) > 0 {
 		var childRoutes []map[string]interface{}
 		for _, child := range children {
@@ -618,7 +633,6 @@ func (s *SystemUserService) UpdateCurrentUserPassword(userID uint, oldPassword, 
 		return err
 	}
 
-	// 验证原密码
 	if !util.BcryptCheck(oldPassword, user.Password) {
 		return errors.New("原密码不正确")
 	}

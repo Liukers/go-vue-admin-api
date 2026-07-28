@@ -6,6 +6,7 @@ import (
 	"go-vue-admin/global"
 	"go-vue-admin/middleware"
 	"go-vue-admin/models"
+	"go-vue-admin/models/constants"
 	"go-vue-admin/models/res"
 	"go-vue-admin/util"
 
@@ -32,11 +33,11 @@ type SystemUserApi struct{}
 func (a *SystemUserApi) Login(c *gin.Context) {
 	var req models.SystemUserLoginReq
 	if err := c.ShouldBindWith(&req, binding.JSON); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
-	// 获取客户端信息
+	// 获取客户端信息（用于登录日志）
 	userAgent := c.Request.UserAgent()
 	resp, err := systemUserService.Login(&req, c.ClientIP(), userAgent)
 	if err != nil {
@@ -86,10 +87,14 @@ func (a *SystemUserApi) RefreshToken(c *gin.Context) {
 	tokenString := parts[1]
 	j := util.NewJWT()
 
-	// 1. 解析旧token
-	claims, err := j.ParseToken(tokenString)
+	// 1. 解析旧token（签名必须有效；已过期的token允许在宽限期内刷新）
+	claims, err := j.ParseTokenIgnoreExpiry(tokenString)
 	if err != nil {
 		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "token无效: "+err.Error())
+		return
+	}
+	if claims.ExpiresAt != nil && time.Since(claims.ExpiresAt.Time) > util.RefreshGracePeriod {
+		res.FailWithMessage(c, res.ErrorCodeTokenExpired, "token已过期超过刷新宽限期，请重新登录")
 		return
 	}
 
@@ -112,13 +117,24 @@ func (a *SystemUserApi) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	if user.Status != 1 {
+	if user.Status != constants.UserStatusEnabled {
 		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "用户已被禁用")
 		return
 	}
 
 	if user.LockedUntil != nil && time.Time(*user.LockedUntil).After(time.Now()) {
 		res.FailWithMessage(c, res.ErrorCodeAccountLocked, "账户已被锁定")
+		return
+	}
+
+	// 校验角色状态（与 JWTAuth 中间件判定一致，角色禁用后不得再换发）
+	var role models.SystemRole
+	if err := global.DB.Select("status").First(&role, user.RoleID).Error; err != nil {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "角色不存在，请联系管理员")
+		return
+	}
+	if role.Status != constants.RoleStatusEnabled {
+		res.FailWithMessage(c, res.ErrorCodeTokenInvalid, "角色已被禁用，请联系管理员")
 		return
 	}
 
@@ -157,8 +173,7 @@ func (a *SystemUserApi) GetUserInfo(c *gin.Context) {
 		res.Fail(c, res.ErrorCodeUnauthorized)
 		return
 	}
-	
-	// 安全的类型断言
+
 	uid, ok := userId.(uint)
 	if !ok {
 		res.Fail(c, res.ErrorCodeUnauthorized)
@@ -184,14 +199,12 @@ func (a *SystemUserApi) GetUserInfo(c *gin.Context) {
 // @Failure 401 {object} res.Response "未登录或token过期"
 // @Router /api/v1/system/routes [get]
 func (a *SystemUserApi) GetAsyncRoutes(c *gin.Context) {
-	// 从JWT中获取用户ID
 	userId, exists := c.Get("userId")
 	if !exists {
 		res.Fail(c, res.ErrorCodeUnauthorized)
 		return
 	}
 
-	// 安全的类型断言
 	uid, ok := userId.(uint)
 	if !ok {
 		res.Fail(c, res.ErrorCodeUnauthorized)
@@ -265,7 +278,7 @@ func (a *SystemUserApi) GetUserList(c *gin.Context) {
 func (a *SystemUserApi) CreateUser(c *gin.Context) {
 	var req models.SystemUserReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -307,20 +320,37 @@ func (a *SystemUserApi) UpdateUser(c *gin.Context) {
 
 	var req models.SystemUserUpdateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
-	// 将路径参数的ID设置到请求体
 	req.ID = id
 
-	// 检查用户是否存在
-	if _, err := systemUserService.GetUserByID(req.ID); err != nil {
+	targetUser, err := systemUserService.GetUserByID(req.ID)
+	if err != nil {
 		res.Fail(c, res.ErrorCodeUserNotExist)
 		return
 	}
 
-	// 如果要修改用户名，检查是否与其他用户冲突
+	// 超级管理员保护：禁止禁用或降级最后一个超级管理员（与 DeleteUser 的保护一致）
+	if targetUser.Role.RoleCode == "admin" {
+		var adminRole models.SystemRole
+		if err := global.DB.Where("role_code = ?", "admin").First(&adminRole).Error; err == nil {
+			var adminCount int64
+			global.DB.Model(&models.SystemUser{}).Where("role_id = ?", adminRole.ID).Count(&adminCount)
+			if adminCount <= 1 {
+				if req.Status == 2 {
+					res.FailWithMessage(c, res.ErrorCodeBusinessError, "不能禁用最后一个超级管理员")
+					return
+				}
+				if req.RoleID != 0 && req.RoleID != adminRole.ID {
+					res.FailWithMessage(c, res.ErrorCodeBusinessError, "不能将最后一个超级管理员降级为其他角色")
+					return
+				}
+			}
+		}
+	}
+
 	if req.Username != "" && systemUserService.CheckUserExistExceptID(req.Username, req.ID) {
 		res.Fail(c, res.ErrorCodeUserExist)
 		return
@@ -337,7 +367,7 @@ func (a *SystemUserApi) UpdateUser(c *gin.Context) {
 // DeleteUser
 // @Tags 系统管理-用户
 // @Summary 删除用户
-// @Description 根据ID删除用户（软删除）
+// @Description 根据ID删除用户（物理删除）
 // @Produce json
 // @Security BearerAuth
 // @Param id path int true "用户ID"
@@ -397,15 +427,14 @@ func (a *SystemUserApi) DeleteUser(c *gin.Context) {
 // @Param data body models.SystemUserProfileReq true "个人信息"
 // @Success 200 {object} res.Response "更新成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/user/profile [put]
+// @Router /api/v1/system/users/profile [put]
 func (a *SystemUserApi) UpdateCurrentUser(c *gin.Context) {
 	userId, exists := c.Get("userId")
 	if !exists {
 		res.Fail(c, res.ErrorCodeUnauthorized)
 		return
 	}
-	
-	// 安全的类型断言
+
 	uid, ok := userId.(uint)
 	if !ok {
 		res.Fail(c, res.ErrorCodeUnauthorized)
@@ -414,7 +443,7 @@ func (a *SystemUserApi) UpdateCurrentUser(c *gin.Context) {
 
 	var req models.SystemUserProfileReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -437,15 +466,14 @@ func (a *SystemUserApi) UpdateCurrentUser(c *gin.Context) {
 // @Success 200 {object} res.Response "修改成功"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期/原密码错误"
-// @Router /api/v1/system/user/password [put]
+// @Router /api/v1/system/users/password [put]
 func (a *SystemUserApi) UpdateCurrentUserPassword(c *gin.Context) {
 	userId, exists := c.Get("userId")
 	if !exists {
 		res.Fail(c, res.ErrorCodeUnauthorized)
 		return
 	}
-	
-	// 安全的类型断言
+
 	uid, ok := userId.(uint)
 	if !ok {
 		res.Fail(c, res.ErrorCodeUnauthorized)
@@ -454,7 +482,7 @@ func (a *SystemUserApi) UpdateCurrentUserPassword(c *gin.Context) {
 
 	var req models.SystemUserPasswordReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 

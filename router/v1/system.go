@@ -18,16 +18,19 @@ func InitSystemRouter(rg *gin.RouterGroup) {
 	router := rg.Group("/system")
 	{
 		// 公开路由（不需要认证）
-		// 登录接口添加限流保护，防止暴力破解
-		router.GET("/captcha", systemCaptchaApi.GetCaptcha)
+		// 登录接口添加限流保护，防止暴力破解；验证码接口限流防止刷量
+		router.GET("/captcha", middleware.CaptchaRateLimit(), systemCaptchaApi.GetCaptcha)
 		router.POST("/login", middleware.LoginRateLimit(), systemApi.Login)
 		router.POST("/logout", systemApi.Logout)
 		router.POST("/refresh-token", middleware.LoginRateLimit(), systemApi.RefreshToken)
 
 		// 需要认证的路由
+		// 注意：黑名单检查必须在 JWTAuth 之前——
+		// JWTAuth 会对临期token自动换发新token，已拉黑token若先通过JWTAuth，
+		// 即使请求被拒也能从响应头拿到新token（黑名单被绕过）
 		authRouter := router.Use(
-			middleware.JWTAuth(),
 			middleware.TokenBlacklistMiddleware(),
+			middleware.JWTAuth(),
 			middleware.CasbinAuth(),
 			middleware.OperationLog(),
 			middleware.APIRateLimit(),

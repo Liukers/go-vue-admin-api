@@ -1,51 +1,76 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"go-vue-admin/global"
 	"go-vue-admin/models/res"
 	"go-vue-admin/util"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// 确保表只创建一次
-var initBlacklistOnce sync.Once
+// blacklistTableReady 标记黑名单表是否已在启动时初始化成功
+var blacklistTableReady atomic.Bool
+
+// createBlacklistTableSQL 黑名单建表语句
+const createBlacklistTableSQL = `
+CREATE TABLE IF NOT EXISTS token_blacklist (
+	id BIGINT PRIMARY KEY AUTO_INCREMENT,
+	token VARCHAR(512) NOT NULL UNIQUE COMMENT 'Token字符串',
+	expires_at DATETIME NOT NULL COMMENT 'Token过期时间',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '加入黑名单时间',
+	INDEX idx_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Token黑名单表';
+`
 
 // TokenBlacklist Token黑名单管理
 type TokenBlacklist struct{}
 
-// initBlacklistTable 初始化黑名单表（只执行一次）
-func initBlacklistTable() error {
-	var initErr error
-	initBlacklistOnce.Do(func() {
-		sql := `
-		CREATE TABLE IF NOT EXISTS token_blacklist (
-			id BIGINT PRIMARY KEY AUTO_INCREMENT,
-			token VARCHAR(512) NOT NULL UNIQUE COMMENT 'Token字符串',
-			expires_at DATETIME NOT NULL COMMENT 'Token过期时间',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '加入黑名单时间',
-			INDEX idx_expires (expires_at)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Token黑名单表';
-		`
-		if err := global.DB.Exec(sql).Error; err != nil {
-			initErr = err
-			global.Log.Errorf("创建token黑名单表失败: %v", err)
+// InitTokenBlacklistTable 启动时初始化token黑名单表
+// 应在服务启动阶段调用且失败即退出（黑名单表不可用时继续运行会让黑名单静默失效）
+func InitTokenBlacklistTable() error {
+	if blacklistTableReady.Load() {
+		return nil
+	}
+	if err := global.DB.Exec(createBlacklistTableSQL).Error; err != nil {
+		return err
+	}
+	blacklistTableReady.Store(true)
+	return nil
+}
+
+// StartTokenBlacklistCleanup 定期清理过期黑名单记录并清扫过期刷新锁（直到 ctx 取消）
+func StartTokenBlacklistCleanup(ctx context.Context, interval time.Duration) {
+	cleanup := func() {
+		tb := &TokenBlacklist{}
+		if err := tb.CleanupExpired(); err != nil {
+			global.Log.Warnf("清理过期token黑名单失败: %v", err)
 		}
-	})
-	return initErr
+		sweepExpiredRefreshLocks()
+	}
+	cleanup()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanup()
+		}
+	}
 }
 
 // AddToBlacklist 将token加入黑名单
 func (tb *TokenBlacklist) AddToBlacklist(token string, expiresAt time.Time) error {
-	// 初始化表（只执行一次）
-	if err := initBlacklistTable(); err != nil {
-		return err
+	if !blacklistTableReady.Load() {
+		return errors.New("token黑名单表未初始化")
 	}
 
-	// 插入黑名单
 	result := global.DB.Exec(
 		"INSERT IGNORE INTO token_blacklist (token, expires_at) VALUES (?, ?)",
 		token, expiresAt,
@@ -58,16 +83,17 @@ func (tb *TokenBlacklist) AddToBlacklist(token string, expiresAt time.Time) erro
 }
 
 // IsBlacklisted 检查token是否在黑名单中
+// 仅按token匹配（不带过期时间条件）：过期token在刷新宽限期内仍可用于
+// refresh-token 换发，黑名单必须对其同样生效；宽限期外的旧记录由 CleanupExpired 清理
 func (tb *TokenBlacklist) IsBlacklisted(token string) bool {
-	// 初始化表（只执行一次）
-	if err := initBlacklistTable(); err != nil {
-		global.Log.Debugf("初始化token黑名单表失败: %v", err)
+	if !blacklistTableReady.Load() {
+		global.Log.Warn("token黑名单表未初始化，跳过黑名单检查")
 		return false
 	}
 	
 	var count int64
 	result := global.DB.Raw(
-		"SELECT COUNT(*) FROM token_blacklist WHERE token = ? AND expires_at > NOW()",
+		"SELECT COUNT(*) FROM token_blacklist WHERE token = ?",
 		token,
 	).Scan(&count)
 	
@@ -80,10 +106,11 @@ func (tb *TokenBlacklist) IsBlacklisted(token string) bool {
 	return count > 0
 }
 
-// CleanupExpired 清理过期的黑名单记录
+// CleanupExpired 清理过期时间已超过刷新宽限期的黑名单记录
 // 建议定期调用（如每天一次）
 func (tb *TokenBlacklist) CleanupExpired() error {
-	return global.DB.Exec("DELETE FROM token_blacklist WHERE expires_at <= NOW()").Error
+	cutoff := time.Now().Add(-util.RefreshGracePeriod)
+	return global.DB.Exec("DELETE FROM token_blacklist WHERE expires_at <= ?", cutoff).Error
 }
 
 // TokenBlacklistMiddleware Token黑名单检查中间件
@@ -130,16 +157,16 @@ func LogoutHandler(c *gin.Context) {
 
 	token := parts[1]
 
-	// 解析token获取过期时间
+	// 忽略过期校验解析：过期token登出同样要进黑名单，
+	// 否则其在刷新宽限期内仍可用于 refresh-token 换发新token
 	j := util.NewJWT()
-	claims, err := j.ParseToken(token)
+	claims, err := j.ParseTokenIgnoreExpiry(token)
 	if err != nil {
-		// Token已过期或无效，直接返回成功
+		// Token无效，直接返回成功
 		res.Success(c, nil)
 		return
 	}
 
-	// 将token加入黑名单
 	tb := &TokenBlacklist{}
 	if claims.ExpiresAt != nil {
 		if err := tb.AddToBlacklist(token, claims.ExpiresAt.Time); err != nil {

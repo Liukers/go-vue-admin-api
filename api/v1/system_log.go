@@ -22,7 +22,7 @@ type SystemLogApi struct{}
 // @Param startTime query string false "开始时间（格式：2006-01-02）"
 // @Param endTime query string false "结束时间（格式：2006-01-02）"
 // @Success 200 {object} res.Response{data=res.PageResult{list=[]models.OperationLog}} "成功"
-// @Router /api/v1/system/log/operation/list [get]
+// @Router /api/v1/system/operation-logs [get]
 func (a *SystemLogApi) GetOperationLogList(c *gin.Context) {
 	page := util.StringToInt(c.DefaultQuery("page", "1"))
 	pageSize := util.StringToInt(c.DefaultQuery("pageSize", "10"))
@@ -31,7 +31,6 @@ func (a *SystemLogApi) GetOperationLogList(c *gin.Context) {
 	startTime := c.Query("startTime")
 	endTime := c.Query("endTime")
 
-	// 限制分页大小
 	if pageSize > 100 {
 		pageSize = 100
 	}
@@ -64,7 +63,7 @@ func (a *SystemLogApi) GetOperationLogList(c *gin.Context) {
 // @Param startTime query string false "开始时间（格式：2006-01-02）"
 // @Param endTime query string false "结束时间（格式：2006-01-02）"
 // @Success 200 {object} res.Response{data=res.PageResult{list=[]models.LoginLog}} "成功"
-// @Router /api/v1/system/log/login/list [get]
+// @Router /api/v1/system/login-logs [get]
 func (a *SystemLogApi) GetLoginLogList(c *gin.Context) {
 	page := util.StringToInt(c.DefaultQuery("page", "1"))
 	pageSize := util.StringToInt(c.DefaultQuery("pageSize", "10"))
@@ -73,7 +72,6 @@ func (a *SystemLogApi) GetLoginLogList(c *gin.Context) {
 	startTime := c.Query("startTime")
 	endTime := c.Query("endTime")
 
-	// 限制分页大小
 	if pageSize > 100 {
 		pageSize = 100
 	}
@@ -101,7 +99,7 @@ func (a *SystemLogApi) GetLoginLogList(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path int true "日志ID"
 // @Success 200 {object} res.Response "删除成功"
-// @Router /api/v1/system/log/operation/delete/{id} [delete]
+// @Router /api/v1/system/operation-logs/{id} [delete]
 func (a *SystemLogApi) DeleteOperationLog(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {
@@ -125,7 +123,7 @@ func (a *SystemLogApi) DeleteOperationLog(c *gin.Context) {
 // @Security BearerAuth
 // @Param id path int true "日志ID"
 // @Success 200 {object} res.Response "删除成功"
-// @Router /api/v1/system/log/login/delete/{id} [delete]
+// @Router /api/v1/system/login-logs/{id} [delete]
 func (a *SystemLogApi) DeleteLoginLog(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {
@@ -148,7 +146,7 @@ func (a *SystemLogApi) DeleteLoginLog(c *gin.Context) {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} res.Response "清空成功"
-// @Router /api/v1/system/log/operation/clear [delete]
+// @Router /api/v1/system/operation-logs [delete]
 func (a *SystemLogApi) ClearOperationLog(c *gin.Context) {
 	if err := systemLogService.ClearOperationLog(); err != nil {
 		res.Error(c, err)
@@ -165,7 +163,7 @@ func (a *SystemLogApi) ClearOperationLog(c *gin.Context) {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} res.Response "清空成功"
-// @Router /api/v1/system/log/login/clear [delete]
+// @Router /api/v1/system/login-logs [delete]
 func (a *SystemLogApi) ClearLoginLog(c *gin.Context) {
 	if err := systemLogService.ClearLoginLog(); err != nil {
 		res.Error(c, err)

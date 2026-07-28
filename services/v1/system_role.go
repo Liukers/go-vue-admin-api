@@ -7,6 +7,8 @@ import (
 
 	"go-vue-admin/global"
 	"go-vue-admin/models"
+	"go-vue-admin/models/res"
+	"go-vue-admin/util"
 )
 
 type SystemRoleService struct{}
@@ -37,11 +39,10 @@ func (s *SystemRoleService) GetRoleList(page, pageSize int, keyword string) ([]m
 		db = db.Where("role_name LIKE ? OR role_code LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
-	// 检查Count错误
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	
+
 	err := db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&roles).Error
 
 	return roles, total, err
@@ -97,7 +98,6 @@ func (s *SystemRoleService) DeleteRole(id uint) error {
 		return ErrRoleHasUsers
 	}
 
-	// 开启事务
 	tx := global.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -105,19 +105,28 @@ func (s *SystemRoleService) DeleteRole(id uint) error {
 		}
 	}()
 
-	// 删除角色的菜单权限关联
 	if err := tx.Where("role_id = ?", id).Delete(&models.SystemRoleMenu{}).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	// 删除角色
 	if err := tx.Delete(&models.SystemRole{}, id).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+
+	// 清理该角色的 Casbin 策略，避免残留孤儿策略
+	if global.Casbin != nil {
+		if _, err := global.Casbin.RemoveFilteredPolicy(0, fmt.Sprintf("role_%d", id)); err != nil {
+			global.Log.Errorf("清理角色[%d]的Casbin策略失败: %v", id, err)
+		}
+	}
+
+	return nil
 }
 
 // GetRoleMenus 获取角色的菜单权限
@@ -129,7 +138,19 @@ func (s *SystemRoleService) GetRoleMenus(roleID uint) ([]uint, error) {
 
 // SetRoleMenus 设置角色的菜单权限
 func (s *SystemRoleService) SetRoleMenus(req *SetRoleMenusReq) error {
-	// 开启事务
+	// 禁止操作系统保留角色的权限：
+	// admin 的接口权限由通配策略保证，其侧边栏菜单由关联表驱动，改写会导致菜单丢失
+	var role models.SystemRole
+	if err := global.DB.First(&role, req.RoleID).Error; err != nil {
+		return res.NewAppErrorByCode(res.ErrorCodeNotFound)
+	}
+	if role.RoleCode == "admin" {
+		return res.NewAppError(res.ErrorCodeBusinessError, "系统保留角色不允许修改权限")
+	}
+
+	//有操作按钮必有查看按钮，无查看按钮必无操作按钮
+	req.MenuIDs = normalizeRoleMenuIDs(req.MenuIDs)
+
 	tx := global.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -137,13 +158,11 @@ func (s *SystemRoleService) SetRoleMenus(req *SetRoleMenusReq) error {
 		}
 	}()
 
-	// 删除原有的权限
 	if err := tx.Where("role_id = ?", req.RoleID).Delete(&models.SystemRoleMenu{}).Error; err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	// 批量添加新的权限（优化：使用CreateInBatches）
 	if len(req.MenuIDs) > 0 {
 		roleMenus := make([]models.SystemRoleMenu, 0, len(req.MenuIDs))
 		for _, menuID := range req.MenuIDs {
@@ -152,8 +171,7 @@ func (s *SystemRoleService) SetRoleMenus(req *SetRoleMenusReq) error {
 				MenuID: menuID,
 			})
 		}
-		
-		// 批量插入，每批100条
+
 		if err := tx.CreateInBatches(roleMenus, 100).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -164,167 +182,82 @@ func (s *SystemRoleService) SetRoleMenus(req *SetRoleMenusReq) error {
 		return err
 	}
 
-	// 同步更新 Casbin 策略
-	s.syncCasbinPolicy(req.RoleID, req.MenuIDs)
+	// 同步更新 Casbin 策略（按角色菜单全量重建，唯一的策略生成入口）
+	if err := util.SyncRoleCasbinPolicies(global.Casbin, req.RoleID); err != nil {
+		global.Log.Errorf("同步角色[%d]的Casbin策略失败: %v", req.RoleID, err)
+	}
 
 	return nil
 }
 
-// syncCasbinPolicy 同步 Casbin 策略
-func (s *SystemRoleService) syncCasbinPolicy(roleID uint, menuIDs []uint) {
-	if global.Casbin == nil {
-		return
-	}
-
-	roleKey := fmt.Sprintf("role_%d", roleID)
-
-	// 清除该角色的所有旧策略
-	global.Casbin.RemoveFilteredPolicy(0, roleKey)
-
-	// 所有角色都允许访问菜单路由接口（注意路径带 /api 前缀）
-	global.Casbin.AddPolicy(roleKey, "/api/v1/system/routes", "GET")
-
-	// 如果没有菜单权限，直接返回
+// normalizeRoleMenuIDs 兜底归一化角色菜单权限：
+// 同一菜单下勾选任意操作按钮时，必须同时勾选“查看”按钮；
+// 未勾选“查看”按钮时，不得保留该菜单下的操作按钮。
+func normalizeRoleMenuIDs(menuIDs []uint) []uint {
 	if len(menuIDs) == 0 {
-		return
+		return menuIDs
 	}
 
-	// 获取菜单对应的 API 路径
-	var menus []models.SystemMenu
-	if err := global.DB.Where("id IN ?", menuIDs).Find(&menus).Error; err != nil {
-		global.Log.Errorf("获取菜单信息失败: %v", err)
-		return
+	var allMenus []models.SystemMenu
+	if err := global.DB.Find(&allMenus).Error; err != nil {
+		global.Log.Warnf("归一化角色菜单时查询所有菜单失败: %v", err)
+		return menuIDs
 	}
 
-	// 为角色添加策略（基于菜单权限，路径带 /api 前缀）
-	for _, menu := range menus {
-		// 根据菜单类型添加不同的权限策略
-		switch menu.MenuType {
-		case 1: // 目录 - 只添加查看权限
-			if menu.Path != "" {
-				global.Casbin.AddPolicy(roleKey, "/api/v1/system/routes", "GET")
-			}
-		case 2: // 菜单 - 添加查看权限
-			// 根据菜单路径映射到对应的 API
-			s.addMenuPolicy(roleKey, menu)
-		case 3: // 按钮 - 添加操作权限
-			if menu.Perm != "" {
-				// 按钮权限格式: system:user:add, system:user:edit 等
-				s.addButtonPolicy(roleKey, menu)
+	menuMap := make(map[uint]models.SystemMenu, len(allMenus))
+	childrenByParent := make(map[uint][]models.SystemMenu)
+	for _, m := range allMenus {
+		menuMap[m.ID] = m
+		if m.ParentID > 0 {
+			childrenByParent[m.ParentID] = append(childrenByParent[m.ParentID], m)
+		}
+	}
+
+	idSet := make(map[uint]struct{}, len(menuIDs))
+	for _, id := range menuIDs {
+		idSet[id] = struct{}{}
+	}
+
+	// 第一轮：勾选操作按钮时自动补 view
+	for _, id := range menuIDs {
+		menu, ok := menuMap[id]
+		if !ok || menu.MenuType != 3 || strings.HasSuffix(menu.Perm, ":view") {
+			continue
+		}
+		for _, sib := range childrenByParent[menu.ParentID] {
+			if sib.MenuType == 3 && strings.HasSuffix(sib.Perm, ":view") {
+				idSet[sib.ID] = struct{}{}
+				break
 			}
 		}
 	}
 
-	// 所有角色都允许访问个人中心相关接口（路径带 /api 前缀）
-	global.Casbin.AddPolicy(roleKey, "/api/v1/system/users/info", "GET")
-	global.Casbin.AddPolicy(roleKey, "/api/v1/system/users/profile", "PUT")
-	global.Casbin.AddPolicy(roleKey, "/api/v1/system/users/password", "PUT")
-}
-
-// addMenuPolicy 添加菜单对应的 API 权限策略
-func (s *SystemRoleService) addMenuPolicy(roleKey string, menu models.SystemMenu) {
-	// 根据菜单路径映射到后端 API（路径带 /api 前缀）
-	apiPath := s.mapMenuPathToAPI(menu.Path)
-	if apiPath != "" {
-		global.Casbin.AddPolicy(roleKey, "/api"+apiPath, "GET")
-	}
-}
-
-// addButtonPolicy 添加按钮对应的 API 权限策略
-func (s *SystemRoleService) addButtonPolicy(roleKey string, menu models.SystemMenu) {
-	// 根据 perm 字段解析权限（路径带 /api 前缀）
-	// perm 格式: system:user:add, system:user:edit, system:user:delete 等
-	apiPath := s.mapPermToAPI(menu.Perm)
-	if apiPath != "" {
-		// 根据操作类型确定 HTTP 方法
-		method := s.mapPermToMethod(menu.Perm)
-		global.Casbin.AddPolicy(roleKey, "/api"+apiPath, method)
-	}
-}
-
-// mapMenuPathToAPI 将菜单路径映射到 API 路径
-func (s *SystemRoleService) mapMenuPathToAPI(menuPath string) string {
-	// 简化的映射规则
-	// 例如: /system/user -> /v1/system/users
-	//       /system/role -> /v1/system/roles
-	switch menuPath {
-	case "/system/user":
-		return "/v1/system/users"
-	case "/system/role":
-		return "/v1/system/roles"
-	case "/system/menu":
-		return "/v1/system/menus"
-	case "/system/setting":
-		return "/v1/system/settings"
-	case "/system/log/operation":
-		return "/v1/system/operation-logs"
-	case "/system/log/login":
-		return "/v1/system/login-logs"
-	default:
-		return ""
-	}
-}
-
-// mapPermToAPI 将权限标识映射到 API 路径
-func (s *SystemRoleService) mapPermToAPI(perm string) string {
-	// perm 格式: system:user:add, system:user:edit 等
-	// 映射到: /v1/system/users
-	parts := splitPerm(perm)
-	if len(parts) < 2 {
-		return ""
-	}
-
-	switch parts[0] + ":" + parts[1] {
-	case "system:user":
-		return "/v1/system/users"
-	case "system:role":
-		return "/v1/system/roles"
-	case "system:menu":
-		return "/v1/system/menus"
-	case "system:setting":
-		return "/v1/system/settings"
-	case "system:log:operation":
-		return "/v1/system/operation-logs"
-	case "system:log:login":
-		return "/v1/system/login-logs"
-	default:
-		return ""
-	}
-}
-
-// mapPermToMethod 将权限标识映射到 HTTP 方法
-func (s *SystemRoleService) mapPermToMethod(perm string) string {
-	// 根据 perm 后缀判断操作类型
-	if strings.Contains(perm, ":add") {
-		return "POST"
-	}
-	if strings.Contains(perm, ":edit") {
-		return "PUT"
-	}
-	if strings.Contains(perm, ":delete") {
-		return "DELETE"
-	}
-	if strings.Contains(perm, ":export") {
-		return "GET"
-	}
-	return "GET"
-}
-
-// splitPerm 分割权限标识
-func splitPerm(perm string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(perm); i++ {
-		if perm[i] == ':' {
-			parts = append(parts, perm[start:i])
-			start = i + 1
+	// 第二轮：若某菜单下没有 view，则清除该菜单下所有操作按钮
+	for _, children := range childrenByParent {
+		hasView := false
+		for _, child := range children {
+			if child.MenuType == 3 && strings.HasSuffix(child.Perm, ":view") {
+				if _, ok := idSet[child.ID]; ok {
+					hasView = true
+					break
+				}
+			}
+		}
+		if !hasView {
+			for _, child := range children {
+				if child.MenuType == 3 {
+					delete(idSet, child.ID)
+				}
+			}
 		}
 	}
-	parts = append(parts, perm[start:])
-	return parts
+
+	result := make([]uint, 0, len(idSet))
+	for id := range idSet {
+		result = append(result, id)
+	}
+	return result
 }
-
-
 
 // ==================== 菜单管理 ====================
 
@@ -366,6 +299,8 @@ func (s *SystemRoleService) buildMenuTree(menus []models.SystemMenu, parentId ui
 				"path":      menu.Path,
 				"component": menu.Component,
 				"perm":      menu.Perm,
+				"apiPath":   menu.ApiPath,
+				"method":    menu.Method,
 				"sort":      menu.Sort,
 				"status":    menu.Status,
 				"visible":   menu.Visible,
@@ -384,7 +319,6 @@ func (s *SystemRoleService) buildMenuTree(menus []models.SystemMenu, parentId ui
 
 // CreateMenu 创建菜单
 func (s *SystemRoleService) CreateMenu(menu *models.SystemMenu) (uint, error) {
-	// 开启事务
 	tx := global.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -392,7 +326,6 @@ func (s *SystemRoleService) CreateMenu(menu *models.SystemMenu) (uint, error) {
 		}
 	}()
 
-	// 创建菜单
 	if err := tx.Create(menu).Error; err != nil {
 		tx.Rollback()
 		return 0, err
@@ -420,7 +353,7 @@ func (s *SystemRoleService) CreateMenu(menu *models.SystemMenu) (uint, error) {
 
 // UpdateMenu 更新菜单
 func (s *SystemRoleService) UpdateMenu(menu *models.SystemMenu) error {
-	return global.DB.Model(&models.SystemMenu{}).Where("id = ?", menu.ID).Updates(map[string]interface{}{
+	if err := global.DB.Model(&models.SystemMenu{}).Where("id = ?", menu.ID).Updates(map[string]interface{}{
 		"parent_id": menu.ParentID,
 		"menu_name": menu.MenuName,
 		"menu_type": menu.MenuType,
@@ -428,15 +361,31 @@ func (s *SystemRoleService) UpdateMenu(menu *models.SystemMenu) error {
 		"path":      menu.Path,
 		"component": menu.Component,
 		"perm":      menu.Perm,
+		"api_path":  menu.ApiPath,
+		"method":    menu.Method,
 		"sort":      menu.Sort,
 		"status":    menu.Status,
 		"visible":   menu.Visible,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+
+	// 菜单的 api_path/method/status 变更会影响权限策略，同步重建关联角色的策略
+	var roleIDs []uint
+	if err := global.DB.Model(&models.SystemRoleMenu{}).Where("menu_id = ?", menu.ID).Distinct().Pluck("role_id", &roleIDs).Error; err != nil {
+		global.Log.Errorf("查询菜单[%d]关联角色失败: %v", menu.ID, err)
+		return nil
+	}
+	for _, roleID := range roleIDs {
+		if err := util.SyncRoleCasbinPolicies(global.Casbin, roleID); err != nil {
+			global.Log.Errorf("更新菜单后同步角色[%d]的Casbin策略失败: %v", roleID, err)
+		}
+	}
+	return nil
 }
 
 // DeleteMenu 删除菜单
 func (s *SystemRoleService) DeleteMenu(id uint) error {
-	// 检查是否有子菜单
 	var count int64
 	if err := global.DB.Model(&models.SystemMenu{}).Where("parent_id = ?", id).Count(&count).Error; err != nil {
 		return err
@@ -445,7 +394,41 @@ func (s *SystemRoleService) DeleteMenu(id uint) error {
 		return ErrMenuHasChildren
 	}
 
-	return global.DB.Delete(&models.SystemMenu{}, id).Error
+	// 先记录受影响的角色，删除后需要重建它们的 Casbin 策略
+	var roleIDs []uint
+	if err := global.DB.Model(&models.SystemRoleMenu{}).Where("menu_id = ?", id).Distinct().Pluck("role_id", &roleIDs).Error; err != nil {
+		return err
+	}
+
+	tx := global.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 删除角色-菜单关联，避免残留孤儿数据
+	if err := tx.Where("menu_id = ?", id).Delete(&models.SystemRoleMenu{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := tx.Delete(&models.SystemMenu{}, id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+
+	for _, roleID := range roleIDs {
+		if err := util.SyncRoleCasbinPolicies(global.Casbin, roleID); err != nil {
+			global.Log.Errorf("删除菜单后同步角色[%d]的Casbin策略失败: %v", roleID, err)
+		}
+	}
+
+	return nil
 }
 
 // ==================== 错误定义 ====================

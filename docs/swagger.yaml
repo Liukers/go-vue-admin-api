@@ -65,6 +65,8 @@ definitions:
     type: object
   models.SystemMenu:
     properties:
+      apiPath:
+        type: string
       component:
         type: string
       createdAt:
@@ -77,6 +79,8 @@ definitions:
         type: string
       menuType:
         type: integer
+      method:
+        type: string
       parentId:
         type: integer
       path:
@@ -111,6 +115,19 @@ definitions:
       updatedAt:
         type: string
     type: object
+  models.SystemSetting:
+    properties:
+      createdAt:
+        type: string
+      enableLoginLog:
+        type: integer
+      enableOperationLog:
+        type: integer
+      id:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
   models.SystemUser:
     properties:
       avatar:
@@ -127,6 +144,11 @@ definitions:
         type: string
       nickname:
         type: string
+      perms:
+        description: 前端需要的按钮/接口权限标识数组
+        items:
+          type: string
+        type: array
       phone:
         type: string
       role:
@@ -147,11 +169,17 @@ definitions:
     type: object
   models.SystemUserLoginReq:
     properties:
+      captchaCode:
+        type: string
+      captchaId:
+        type: string
       password:
         type: string
       username:
         type: string
     required:
+    - captchaCode
+    - captchaId
     - password
     - username
     type: object
@@ -246,6 +274,8 @@ definitions:
     type: object
   v1.CreateMenuReq:
     properties:
+      apiPath:
+        type: string
       component:
         type: string
       icon:
@@ -258,6 +288,13 @@ definitions:
         - 2
         - 3
         type: integer
+      method:
+        enum:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        type: string
       parentId:
         type: integer
       path:
@@ -269,6 +306,9 @@ definitions:
       status:
         type: integer
       visible:
+        enum:
+        - 1
+        - 2
         type: integer
     required:
     - menuName
@@ -292,6 +332,8 @@ definitions:
     type: object
   v1.UpdateMenuReq:
     properties:
+      apiPath:
+        type: string
       component:
         type: string
       icon:
@@ -306,6 +348,13 @@ definitions:
         - 2
         - 3
         type: integer
+      method:
+        enum:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        type: string
       parentId:
         type: integer
       path:
@@ -317,6 +366,9 @@ definitions:
       status:
         type: integer
       visible:
+        enum:
+        - 1
+        - 2
         type: integer
     required:
     - id
@@ -339,10 +391,82 @@ definitions:
     - id
     - roleName
     type: object
+  v1.UpdateSettingReq:
+    properties:
+      enableLoginLog:
+        enum:
+        - 1
+        - 2
+        type: integer
+      enableOperationLog:
+        enum:
+        - 1
+        - 2
+        type: integer
+    type: object
 info:
   contact: {}
 paths:
-  /api/v1/system/log/login/clear:
+  /api/v1/system/captcha:
+    get:
+      description: 获取图片验证码，返回验证码ID和base64图片
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: string
+                  type: object
+              type: object
+      summary: 获取验证码
+      tags:
+      - 系统管理-认证
+  /api/v1/system/login:
+    post:
+      consumes:
+      - application/json
+      description: 用户登录接口，需要验证码，返回JWT token
+      parameters:
+      - description: 登录参数（含验证码）
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.SystemUserLoginReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登录成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.SystemUserLoginRes'
+              type: object
+        "400":
+          description: 请求参数错误/验证码错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 登录失败，用户名或密码错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "423":
+          description: 账户已被锁定
+          schema:
+            $ref: '#/definitions/res.Response'
+      summary: 用户登录
+      tags:
+      - 系统管理-认证
+  /api/v1/system/login-logs:
     delete:
       description: 清空所有登录日志（危险操作）
       produces:
@@ -357,28 +481,6 @@ paths:
       summary: 清空登录日志
       tags:
       - 系统管理-日志
-  /api/v1/system/log/login/delete/{id}:
-    delete:
-      description: 根据ID删除登录日志
-      parameters:
-      - description: 日志ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 删除成功
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 删除登录日志
-      tags:
-      - 系统管理-日志
-  /api/v1/system/log/login/list:
     get:
       description: 分页获取登录日志，支持按用户名、状态、时间筛选
       parameters:
@@ -430,24 +532,9 @@ paths:
       summary: 获取登录日志列表
       tags:
       - 系统管理-日志
-  /api/v1/system/log/operation/clear:
+  /api/v1/system/login-logs/{id}:
     delete:
-      description: 清空所有操作日志（危险操作）
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 清空成功
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 清空操作日志
-      tags:
-      - 系统管理-日志
-  /api/v1/system/log/operation/delete/{id}:
-    delete:
-      description: 根据ID删除操作日志
+      description: 根据ID删除登录日志
       parameters:
       - description: 日志ID
         in: path
@@ -463,10 +550,190 @@ paths:
             $ref: '#/definitions/res.Response'
       security:
       - BearerAuth: []
-      summary: 删除操作日志
+      summary: 删除登录日志
       tags:
       - 系统管理-日志
-  /api/v1/system/log/operation/list:
+  /api/v1/system/logout:
+    post:
+      consumes:
+      - application/json
+      description: 用户登出，token将被加入黑名单
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 登出成功
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 用户登出
+      tags:
+      - 系统管理-认证
+  /api/v1/system/menus:
+    get:
+      description: 获取所有菜单列表（扁平结构）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/models.SystemMenu'
+                  type: array
+              type: object
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 获取菜单列表
+      tags:
+      - 系统管理-菜单
+    post:
+      consumes:
+      - application/json
+      description: 创建新菜单
+      parameters:
+      - description: 菜单数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/v1.CreateMenuReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 创建成功，返回菜单ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  type: integer
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 创建菜单
+      tags:
+      - 系统管理-菜单
+  /api/v1/system/menus/{id}:
+    delete:
+      description: 根据ID删除菜单（有子菜单时无法删除）
+      parameters:
+      - description: 菜单ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 该菜单下存在子菜单，无法删除
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 删除菜单
+      tags:
+      - 系统管理-菜单
+    put:
+      consumes:
+      - application/json
+      description: 更新菜单信息
+      parameters:
+      - description: 菜单数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/v1.UpdateMenuReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 更新菜单
+      tags:
+      - 系统管理-菜单
+  /api/v1/system/menus/tree:
+    get:
+      description: 获取菜单树形结构（层级结构）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  items:
+                    additionalProperties: true
+                    type: object
+                  type: array
+              type: object
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 获取菜单树
+      tags:
+      - 系统管理-菜单
+  /api/v1/system/operation-logs:
+    delete:
+      description: 清空所有操作日志（危险操作）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 清空成功
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 清空操作日志
+      tags:
+      - 系统管理-日志
     get:
       description: 分页获取操作日志，支持按用户、状态、时间筛选
       parameters:
@@ -518,23 +785,43 @@ paths:
       summary: 获取操作日志列表
       tags:
       - 系统管理-日志
-  /api/v1/system/login:
-    post:
-      consumes:
-      - application/json
-      description: 用户登录接口，返回JWT token
+  /api/v1/system/operation-logs/{id}:
+    delete:
+      description: 根据ID删除操作日志
       parameters:
-      - description: 登录参数
-        in: body
-        name: data
+      - description: 日志ID
+        in: path
+        name: id
         required: true
-        schema:
-          $ref: '#/definitions/models.SystemUserLoginReq'
+        type: integer
       produces:
       - application/json
       responses:
         "200":
-          description: 登录成功
+          description: 删除成功
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 删除操作日志
+      tags:
+      - 系统管理-日志
+  /api/v1/system/refresh-token:
+    post:
+      consumes:
+      - application/json
+      description: 使用当前token刷新，返回新的token和过期时间。刷新前会校验token有效性、黑名单、用户状态及密码版本。
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 刷新成功
           schema:
             allOf:
             - $ref: '#/definitions/res.Response'
@@ -542,286 +829,14 @@ paths:
                 data:
                   $ref: '#/definitions/models.SystemUserLoginRes'
               type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
         "401":
-          description: 登录失败，用户名或密码错误
+          description: token无效或已过期/已被注销/用户已禁用
           schema:
             $ref: '#/definitions/res.Response'
-      summary: 用户登录
+      summary: 刷新Token
       tags:
       - 系统管理-认证
-  /api/v1/system/logout:
-    post:
-      consumes:
-      - application/json
-      description: 用户登出，token将被加入黑名单
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 登出成功
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 用户登出
-      tags:
-      - 系统管理-认证
-  /api/v1/system/menu/create:
-    post:
-      consumes:
-      - application/json
-      description: 创建新菜单
-      parameters:
-      - description: 菜单数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/v1.CreateMenuReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 创建成功，返回菜单ID
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  type: integer
-              type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 创建菜单
-      tags:
-      - 系统管理-菜单
-  /api/v1/system/menu/delete/{id}:
-    delete:
-      description: 根据ID删除菜单（有子菜单时无法删除）
-      parameters:
-      - description: 菜单ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 删除成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "400":
-          description: 该菜单下存在子菜单，无法删除
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 删除菜单
-      tags:
-      - 系统管理-菜单
-  /api/v1/system/menu/list:
-    get:
-      description: 获取所有菜单列表（扁平结构）
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  items:
-                    $ref: '#/definitions/models.SystemMenu'
-                  type: array
-              type: object
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 获取菜单列表
-      tags:
-      - 系统管理-菜单
-  /api/v1/system/menu/tree:
-    get:
-      description: 获取菜单树形结构（层级结构）
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  items:
-                    additionalProperties: true
-                    type: object
-                  type: array
-              type: object
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 获取菜单树
-      tags:
-      - 系统管理-菜单
-  /api/v1/system/menu/update:
-    put:
-      consumes:
-      - application/json
-      description: 更新菜单信息
-      parameters:
-      - description: 菜单数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/v1.UpdateMenuReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 更新成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 更新菜单
-      tags:
-      - 系统管理-菜单
-  /api/v1/system/role/create:
-    post:
-      consumes:
-      - application/json
-      description: 创建新角色，角色代码不能重复
-      parameters:
-      - description: 角色数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/v1.CreateRoleReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 创建成功，返回角色ID
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  type: integer
-              type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 创建角色
-      tags:
-      - 系统管理-角色
-  /api/v1/system/role/delete/{id}:
-    delete:
-      description: 根据ID删除角色（有关联用户时无法删除，系统保留角色无法删除）
-      parameters:
-      - description: 角色ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 删除成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "400":
-          description: 该角色下存在用户，无法删除/系统保留角色无法删除
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 删除角色
-      tags:
-      - 系统管理-角色
-  /api/v1/system/role/detail/{id}:
-    get:
-      description: 根据ID获取角色详细信息
-      parameters:
-      - description: 角色ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 成功
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/models.SystemRole'
-              type: object
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-        "404":
-          description: 角色不存在
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 获取角色详情
-      tags:
-      - 系统管理-角色
-  /api/v1/system/role/list:
+  /api/v1/system/roles:
     get:
       description: 分页获取角色列表，支持关键词搜索
       parameters:
@@ -865,23 +880,125 @@ paths:
       summary: 获取角色列表
       tags:
       - 系统管理-角色
-  /api/v1/system/role/menus:
-    put:
+    post:
       consumes:
       - application/json
-      description: 为角色分配菜单权限
+      description: 创建新角色，角色代码不能重复
       parameters:
-      - description: 权限数据
+      - description: 角色数据
         in: body
         name: data
         required: true
         schema:
-          $ref: '#/definitions/go-vue-admin_services_v1.SetRoleMenusReq'
+          $ref: '#/definitions/v1.CreateRoleReq'
       produces:
       - application/json
       responses:
         "200":
-          description: 设置成功
+          description: 创建成功，返回角色ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  type: integer
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 创建角色
+      tags:
+      - 系统管理-角色
+  /api/v1/system/roles/{id}:
+    delete:
+      description: 根据ID删除角色（有关联用户时无法删除，系统保留角色无法删除）
+      parameters:
+      - description: 角色ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 该角色下存在用户，无法删除/系统保留角色无法删除
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 删除角色
+      tags:
+      - 系统管理-角色
+    get:
+      description: 根据ID获取角色详细信息
+      parameters:
+      - description: 角色ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.SystemRole'
+              type: object
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+        "404":
+          description: 角色不存在
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 获取角色详情
+      tags:
+      - 系统管理-角色
+    put:
+      consumes:
+      - application/json
+      description: 更新角色信息（角色代码不能修改）
+      parameters:
+      - description: 角色ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 角色数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/v1.UpdateRoleReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
           schema:
             $ref: '#/definitions/res.Response'
         "400":
@@ -894,10 +1011,10 @@ paths:
             $ref: '#/definitions/res.Response'
       security:
       - BearerAuth: []
-      summary: 设置角色的菜单权限
+      summary: 更新角色
       tags:
       - 系统管理-角色
-  /api/v1/system/role/menus/{id}:
+  /api/v1/system/roles/{id}/menus:
     get:
       description: 获取指定角色关联的菜单ID列表
       parameters:
@@ -929,7 +1046,38 @@ paths:
       summary: 获取角色的菜单权限
       tags:
       - 系统管理-角色
-  /api/v1/system/role/options:
+    put:
+      consumes:
+      - application/json
+      description: 为角色分配菜单权限
+      parameters:
+      - description: 权限数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/go-vue-admin_services_v1.SetRoleMenusReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 设置成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 设置角色的菜单权限
+      tags:
+      - 系统管理-角色
+  /api/v1/system/roles/options:
     get:
       description: 获取角色选项列表（排除超级管理员，用于下拉选择）
       produces:
@@ -953,38 +1101,6 @@ paths:
       security:
       - BearerAuth: []
       summary: 获取角色选项列表
-      tags:
-      - 系统管理-角色
-  /api/v1/system/role/update:
-    put:
-      consumes:
-      - application/json
-      description: 更新角色信息（角色代码不能修改）
-      parameters:
-      - description: 角色数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/v1.UpdateRoleReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 更新成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 更新角色
       tags:
       - 系统管理-角色
   /api/v1/system/routes:
@@ -1014,75 +1130,9 @@ paths:
       summary: 获取动态路由
       tags:
       - 系统管理-认证
-  /api/v1/system/user/create:
-    post:
-      consumes:
-      - application/json
-      description: 创建新用户，用户名不能重复
-      parameters:
-      - description: 用户数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/models.SystemUserReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 创建成功，返回用户ID
-          schema:
-            allOf:
-            - $ref: '#/definitions/res.Response'
-            - properties:
-                data:
-                  type: integer
-              type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 创建用户
-      tags:
-      - 系统管理-用户
-  /api/v1/system/user/delete/{id}:
-    delete:
-      description: 根据ID删除用户（软删除）
-      parameters:
-      - description: 用户ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 删除成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-        "404":
-          description: 用户不存在
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 删除用户
-      tags:
-      - 系统管理-用户
-  /api/v1/system/user/info:
+  /api/v1/system/settings:
     get:
-      description: 获取当前登录用户的详细信息
+      description: 获取系统设置信息（操作日志、登录日志开关状态）
       produces:
       - application/json
       responses:
@@ -1093,7 +1143,7 @@ paths:
             - $ref: '#/definitions/res.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/models.SystemUser'
+                  $ref: '#/definitions/models.SystemSetting'
               type: object
         "401":
           description: 未登录或token过期
@@ -1101,10 +1151,41 @@ paths:
             $ref: '#/definitions/res.Response'
       security:
       - BearerAuth: []
-      summary: 获取当前用户信息
+      summary: 获取系统设置
       tags:
-      - 系统管理-认证
-  /api/v1/system/user/list:
+      - 系统管理-系统设置
+    put:
+      consumes:
+      - application/json
+      description: 更新系统设置（开启/关闭操作日志、登录日志）
+      parameters:
+      - description: 设置信息
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/v1.UpdateSettingReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 更新系统设置
+      tags:
+      - 系统管理-系统设置
+  /api/v1/system/users:
     get:
       description: 分页获取系统用户列表，支持关键词搜索和状态筛选
       parameters:
@@ -1152,7 +1233,136 @@ paths:
       summary: 获取用户列表
       tags:
       - 系统管理-用户
-  /api/v1/system/user/password:
+    post:
+      consumes:
+      - application/json
+      description: 创建新用户，用户名不能重复
+      parameters:
+      - description: 用户数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.SystemUserReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 创建成功，返回用户ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  type: integer
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 创建用户
+      tags:
+      - 系统管理-用户
+  /api/v1/system/users/{id}:
+    delete:
+      description: 根据ID删除用户（物理删除）
+      parameters:
+      - description: 用户ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+        "404":
+          description: 用户不存在
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 删除用户
+      tags:
+      - 系统管理-用户
+    put:
+      consumes:
+      - application/json
+      description: 更新用户信息，用户名不能与其他用户重复。管理员可通过此接口修改密码（传入 password 字段）。
+      parameters:
+      - description: 用户ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 用户数据
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/models.SystemUserUpdateReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            $ref: '#/definitions/res.Response'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/res.Response'
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+        "404":
+          description: 用户不存在
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 更新用户
+      tags:
+      - 系统管理-用户
+  /api/v1/system/users/info:
+    get:
+      description: 获取当前登录用户的详细信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/res.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/models.SystemUser'
+              type: object
+        "401":
+          description: 未登录或token过期
+          schema:
+            $ref: '#/definitions/res.Response'
+      security:
+      - BearerAuth: []
+      summary: 获取当前用户信息
+      tags:
+      - 系统管理-认证
+  /api/v1/system/users/password:
     put:
       consumes:
       - application/json
@@ -1184,7 +1394,7 @@ paths:
       summary: 修改当前用户密码
       tags:
       - 系统管理-用户
-  /api/v1/system/user/profile:
+  /api/v1/system/users/profile:
     put:
       consumes:
       - application/json
@@ -1210,42 +1420,6 @@ paths:
       security:
       - BearerAuth: []
       summary: 更新当前用户信息
-      tags:
-      - 系统管理-用户
-  /api/v1/system/user/update:
-    put:
-      consumes:
-      - application/json
-      description: 更新用户信息，用户名不能与其他用户重复。管理员不能通过此接口修改密码，请使用密码重置功能。
-      parameters:
-      - description: 用户数据
-        in: body
-        name: data
-        required: true
-        schema:
-          $ref: '#/definitions/models.SystemUserUpdateReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 更新成功
-          schema:
-            $ref: '#/definitions/res.Response'
-        "400":
-          description: 请求参数错误
-          schema:
-            $ref: '#/definitions/res.Response'
-        "401":
-          description: 未登录或token过期
-          schema:
-            $ref: '#/definitions/res.Response'
-        "404":
-          description: 用户不存在
-          schema:
-            $ref: '#/definitions/res.Response'
-      security:
-      - BearerAuth: []
-      summary: 更新用户
       tags:
       - 系统管理-用户
 swagger: "2.0"

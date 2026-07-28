@@ -1,9 +1,7 @@
 package util
 
 import (
-	"crypto/md5"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -12,18 +10,6 @@ import (
 
 	"go-vue-admin/global"
 )
-
-// MD5 md5加密
-func MD5(str string) string {
-	h := md5.New()
-	h.Write([]byte(str))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// MD5V md5加密（盐值）
-func MD5V(str string, salt string) string {
-	return MD5(str + salt)
-}
 
 // GenerateUUID 生成UUID
 func GenerateUUID() string {
@@ -67,11 +53,6 @@ func GenerateRandomNumber(length int) string {
 		result[i] = charset[num.Int64()]
 	}
 	return string(result)
-}
-
-// GenerateOrderNo 生成订单号
-func GenerateOrderNo() string {
-	return time.Now().Format("20060102150405") + GenerateRandomNumber(6)
 }
 
 // IsEmail 验证邮箱格式

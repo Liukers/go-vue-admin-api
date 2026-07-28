@@ -39,6 +39,8 @@ type SystemMenu struct {
 	Path      string    `gorm:"column:path;type:varchar(255);comment:路由路径" json:"path"`
 	Component string    `gorm:"column:component;type:varchar(255);comment:组件路径" json:"component"`
 	Perm      string    `gorm:"column:perm;type:varchar(255);comment:权限标识" json:"perm"`
+	ApiPath   string    `gorm:"column:api_path;type:varchar(255);comment:关联API路径(菜单/按钮)" json:"apiPath"`
+	Method    string    `gorm:"column:method;type:varchar(10);comment:关联API请求方法(菜单/按钮)" json:"method"`
 	Sort      int       `gorm:"column:sort;type:int;default:0;comment:排序" json:"sort"`
 	Status    int       `gorm:"column:status;type:tinyint;default:1;comment:状态 1启用 2禁用" json:"status"`
 	Visible   int       `gorm:"column:visible;type:tinyint;default:1;comment:是否显示 1是 2否" json:"visible"`
@@ -75,6 +77,8 @@ func (SystemMenu) TableName() string {
 	Path      string `json:"path"`
 	Component string `json:"component"`
 	Perm      string `json:"perm"`
+	ApiPath   string `json:"apiPath"`
+	Method    string `json:"method" binding:"omitempty,oneof=GET POST PUT DELETE"`
 	Sort      int    `json:"sort"`
 	Status    int    `json:"status" binding:"omitempty,status"`
 	Visible   int    `json:"visible" binding:"omitempty,oneof=1 2"`
@@ -90,6 +94,8 @@ func (SystemMenu) TableName() string {
 	Path      string `json:"path"`
 	Component string `json:"component"`
 	Perm      string `json:"perm"`
+	ApiPath   string `json:"apiPath"`
+	Method    string `json:"method" binding:"omitempty,oneof=GET POST PUT DELETE"`
 	Sort      int    `json:"sort"`
 	Status    int    `json:"status" binding:"omitempty,status"`
 	Visible   int    `json:"visible" binding:"omitempty,oneof=1 2"`

@@ -12,5 +12,8 @@ var (
 	Config *conf.Server
 	DB     *gorm.DB
 	Log    *logrus.Logger
-	Casbin *casbin.Enforcer
+	// Casbin 使用线程安全的 SyncedEnforcer：
+	// SetRoleMenus/DeleteMenu/DeleteRole 会在请求路径上修改策略，
+	// 与普通 Enforcer 的并发 Enforce 会触发 concurrent map read/write fatal
+	Casbin *casbin.SyncedEnforcer
 )

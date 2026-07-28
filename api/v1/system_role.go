@@ -40,7 +40,7 @@ type UpdateMenuReq = models.UpdateMenuReq
 // @Param keyword query string false "关键词（角色名称/角色代码）"
 // @Success 200 {object} res.Response{data=res.PageResult{list=[]models.SystemRole}} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/list [get]
+// @Router /api/v1/system/roles [get]
 func (a *SystemRoleApi) GetRoleList(c *gin.Context) {
 	page := util.StringToInt(c.DefaultQuery("page", "1"))
 	pageSize := util.StringToInt(c.DefaultQuery("pageSize", "10"))
@@ -76,7 +76,7 @@ func (a *SystemRoleApi) GetRoleList(c *gin.Context) {
 // @Security BearerAuth
 // @Success 200 {object} res.Response{data=[]models.SystemRole} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/options [get]
+// @Router /api/v1/system/roles/options [get]
 func (a *SystemRoleApi) GetRoleOptions(c *gin.Context) {
 	roles, err := systemRoleService.GetRoleOptions()
 	if err != nil {
@@ -97,7 +97,7 @@ func (a *SystemRoleApi) GetRoleOptions(c *gin.Context) {
 // @Success 200 {object} res.Response{data=models.SystemRole} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
 // @Failure 404 {object} res.Response "角色不存在"
-// @Router /api/v1/system/role/detail/{id} [get]
+// @Router /api/v1/system/roles/{id} [get]
 func (a *SystemRoleApi) GetRoleDetail(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {
@@ -125,11 +125,11 @@ func (a *SystemRoleApi) GetRoleDetail(c *gin.Context) {
 // @Success 200 {object} res.Response{data=uint} "创建成功，返回角色ID"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/create [post]
+// @Router /api/v1/system/roles [post]
 func (a *SystemRoleApi) CreateRole(c *gin.Context) {
 	var req CreateRoleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -139,7 +139,6 @@ func (a *SystemRoleApi) CreateRole(c *gin.Context) {
 		return
 	}
 
-	// 转换到模型
 	role := &models.SystemRole{
 		RoleName:    req.RoleName,
 		RoleCode:    req.RoleCode,
@@ -164,15 +163,16 @@ func (a *SystemRoleApi) CreateRole(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Security BearerAuth
+// @Param id path int true "角色ID"
 // @Param data body UpdateRoleReq true "角色数据"
 // @Success 200 {object} res.Response "更新成功"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/update [put]
+// @Router /api/v1/system/roles/{id} [put]
 func (a *SystemRoleApi) UpdateRole(c *gin.Context) {
 	var req UpdateRoleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -187,13 +187,19 @@ func (a *SystemRoleApi) UpdateRole(c *gin.Context) {
 		res.Fail(c, res.ErrorCodeNotFound)
 		return
 	}
-	
-	// 系统保留角色（admin）只允许修改部分字段
+
+	// 系统保留角色（admin）：禁止禁用、禁止改名，防止管理员把自己锁在系统外
 	if existingRole.RoleCode == "admin" {
-		// 可以添加更多限制逻辑
+		if req.Status == 2 {
+			res.FailWithMessage(c, res.ErrorCodeBusinessError, "系统保留角色不能禁用")
+			return
+		}
+		if req.RoleName != existingRole.RoleName {
+			res.FailWithMessage(c, res.ErrorCodeBusinessError, "系统保留角色不能修改名称")
+			return
+		}
 	}
 
-	// 转换到模型
 	role := &models.SystemRole{
 		ID:          req.ID,
 		RoleName:    req.RoleName,
@@ -220,7 +226,7 @@ func (a *SystemRoleApi) UpdateRole(c *gin.Context) {
 // @Success 200 {object} res.Response "删除成功"
 // @Failure 400 {object} res.Response "该角色下存在用户，无法删除/系统保留角色无法删除"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/delete/{id} [delete]
+// @Router /api/v1/system/roles/{id} [delete]
 func (a *SystemRoleApi) DeleteRole(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {
@@ -234,8 +240,7 @@ func (a *SystemRoleApi) DeleteRole(c *gin.Context) {
 		res.Fail(c, res.ErrorCodeNotFound)
 		return
 	}
-	
-	// 系统保留角色无法删除
+
 	if role.RoleCode == "admin" {
 		res.FailWithMessage(c, res.ErrorCodeBusinessError, "系统保留角色无法删除")
 		return
@@ -262,7 +267,7 @@ func (a *SystemRoleApi) DeleteRole(c *gin.Context) {
 // @Param id path int true "角色ID"
 // @Success 200 {object} res.Response{data=[]uint} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/menus/{id} [get]
+// @Router /api/v1/system/roles/{id}/menus [get]
 func (a *SystemRoleApi) GetRoleMenus(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {
@@ -290,11 +295,11 @@ func (a *SystemRoleApi) GetRoleMenus(c *gin.Context) {
 // @Success 200 {object} res.Response "设置成功"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/role/menus [put]
+// @Router /api/v1/system/roles/{id}/menus [put]
 func (a *SystemRoleApi) SetRoleMenus(c *gin.Context) {
 	var req SetRoleMenusReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -316,7 +321,7 @@ func (a *SystemRoleApi) SetRoleMenus(c *gin.Context) {
 // @Security BearerAuth
 // @Success 200 {object} res.Response{data=[]models.SystemMenu} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/menu/list [get]
+// @Router /api/v1/system/menus [get]
 func (a *SystemRoleApi) GetMenuList(c *gin.Context) {
 	menus, err := systemRoleService.GetMenuList()
 	if err != nil {
@@ -334,7 +339,7 @@ func (a *SystemRoleApi) GetMenuList(c *gin.Context) {
 // @Security BearerAuth
 // @Success 200 {object} res.Response{data=[]map[string]interface{}} "成功"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/menu/tree [get]
+// @Router /api/v1/system/menus/tree [get]
 func (a *SystemRoleApi) GetMenuTree(c *gin.Context) {
 	menuTree, err := systemRoleService.GetMenuTree()
 	if err != nil {
@@ -355,15 +360,14 @@ func (a *SystemRoleApi) GetMenuTree(c *gin.Context) {
 // @Success 200 {object} res.Response{data=uint} "创建成功，返回菜单ID"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/menu/create [post]
+// @Router /api/v1/system/menus [post]
 func (a *SystemRoleApi) CreateMenu(c *gin.Context) {
 	var req CreateMenuReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
-	// 转换到模型
 	menu := &models.SystemMenu{
 		ParentID:  req.ParentID,
 		MenuName:  req.MenuName,
@@ -372,6 +376,8 @@ func (a *SystemRoleApi) CreateMenu(c *gin.Context) {
 		Path:      req.Path,
 		Component: req.Component,
 		Perm:      req.Perm,
+		ApiPath:   req.ApiPath,
+		Method:    req.Method,
 		Sort:      req.Sort,
 		Status:    req.Status,
 		Visible:   req.Visible,
@@ -397,11 +403,11 @@ func (a *SystemRoleApi) CreateMenu(c *gin.Context) {
 // @Success 200 {object} res.Response "更新成功"
 // @Failure 400 {object} res.Response "请求参数错误"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/menu/update [put]
+// @Router /api/v1/system/menus/{id} [put]
 func (a *SystemRoleApi) UpdateMenu(c *gin.Context) {
 	var req UpdateMenuReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		res.ValidationError(c, err.Error())
+		res.ValidationError(c, err)
 		return
 	}
 
@@ -410,7 +416,6 @@ func (a *SystemRoleApi) UpdateMenu(c *gin.Context) {
 		return
 	}
 
-	// 转换到模型
 	menu := &models.SystemMenu{
 		ID:        req.ID,
 		ParentID:  req.ParentID,
@@ -420,6 +425,8 @@ func (a *SystemRoleApi) UpdateMenu(c *gin.Context) {
 		Path:      req.Path,
 		Component: req.Component,
 		Perm:      req.Perm,
+		ApiPath:   req.ApiPath,
+		Method:    req.Method,
 		Sort:      req.Sort,
 		Status:    req.Status,
 		Visible:   req.Visible,
@@ -443,7 +450,7 @@ func (a *SystemRoleApi) UpdateMenu(c *gin.Context) {
 // @Success 200 {object} res.Response "删除成功"
 // @Failure 400 {object} res.Response "该菜单下存在子菜单，无法删除"
 // @Failure 401 {object} res.Response "未登录或token过期"
-// @Router /api/v1/system/menu/delete/{id} [delete]
+// @Router /api/v1/system/menus/{id} [delete]
 func (a *SystemRoleApi) DeleteMenu(c *gin.Context) {
 	id := util.StringToUint(c.Param("id"))
 	if id == 0 {

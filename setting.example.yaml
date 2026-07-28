@@ -1,3 +1,8 @@
+# go-vue-admin-api 配置模板
+# 使用方法：复制本文件为 setting.yaml 后再启动服务
+#   cp setting.example.yaml setting.yaml
+# 注意：setting.yaml 含数据库密码、JWT密钥等敏感信息，已被 .gitignore 忽略，切勿提交到仓库
+
 system:
   # 端口
   addr: 8080
@@ -23,7 +28,7 @@ system:
     e = some(where (p.eft == allow))
 
     [matchers]
-    m = g(r.sub, p.sub) && keyMatch(r.obj, p.obj) && (r.act == p.act || p.act == '*')
+    m = g(r.sub, p.sub) && keyMatch2(r.obj, p.obj) && (r.act == p.act || p.act == '*')
 
 # mysql配置
 mysql:
@@ -32,16 +37,17 @@ mysql:
   config: "charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=True&loc=Local"
   db-name: go-vue-admin
   username: root
-  password: "123456"
+  password: "your-db-password"  # 修改为实际数据库密码
   max-idle-conns: 10
   max-open-conns: 100
-  log-mode: info
+  log-mode: info  # 生产环境建议改为 warn，避免全量SQL及参数进入日志
   log-zap: true
 
 # jwt配置
 jwt:
-  # 密钥
-  signing-key: go-vue-admin-secret-key
+  # 密钥（至少32字节，生成方式: openssl rand -base64 48）
+  # release模式下使用占位符或已知弱密钥将拒绝启动
+  signing-key: please-change-me-use-openssl-rand-base64-48
   # token过期时间（小时）
   expires-time: 24
   # token刷新时间（小时）

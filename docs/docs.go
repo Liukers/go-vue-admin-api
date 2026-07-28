@@ -15,58 +15,98 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/v1/system/log/login/clear": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "清空所有登录日志（危险操作）",
+        "/api/v1/system/captcha": {
+            "get": {
+                "description": "获取图片验证码，返回验证码ID和base64图片",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "系统管理-日志"
+                    "系统管理-认证"
                 ],
-                "summary": "清空登录日志",
+                "summary": "获取验证码",
                 "responses": {
                     "200": {
-                        "description": "清空成功",
+                        "description": "成功",
                         "schema": {
-                            "$ref": "#/definitions/res.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 }
             }
         },
-        "/api/v1/system/log/login/delete/{id}": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
+        "/api/v1/system/login": {
+            "post": {
+                "description": "用户登录接口，需要验证码，返回JWT token",
+                "consumes": [
+                    "application/json"
                 ],
-                "description": "根据ID删除登录日志",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "系统管理-日志"
+                    "系统管理-认证"
                 ],
-                "summary": "删除登录日志",
+                "summary": "用户登录",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "日志ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
+                        "description": "登录参数（含验证码）",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SystemUserLoginReq"
+                        }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "删除成功",
+                        "description": "登录成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.SystemUserLoginRes"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误/验证码错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "登录失败，用户名或密码错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "423": {
+                        "description": "账户已被锁定",
                         "schema": {
                             "$ref": "#/definitions/res.Response"
                         }
@@ -74,7 +114,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/log/login/list": {
+        "/api/v1/system/login-logs": {
             "get": {
                 "security": [
                     {
@@ -162,23 +202,21 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/system/log/operation/clear": {
+            },
             "delete": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "清空所有操作日志（危险操作）",
+                "description": "清空所有登录日志（危险操作）",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "系统管理-日志"
                 ],
-                "summary": "清空操作日志",
+                "summary": "清空登录日志",
                 "responses": {
                     "200": {
                         "description": "清空成功",
@@ -189,21 +227,21 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/log/operation/delete/{id}": {
+        "/api/v1/system/login-logs/{id}": {
             "delete": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "根据ID删除操作日志",
+                "description": "根据ID删除登录日志",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "系统管理-日志"
                 ],
-                "summary": "删除操作日志",
+                "summary": "删除登录日志",
                 "parameters": [
                     {
                         "type": "integer",
@@ -223,7 +261,284 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/log/operation/list": {
+        "/api/v1/system/logout": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "用户登出，token将被加入黑名单",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-认证"
+                ],
+                "summary": "用户登出",
+                "responses": {
+                    "200": {
+                        "description": "登出成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/menus": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取所有菜单列表（扁平结构）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-菜单"
+                ],
+                "summary": "获取菜单列表",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.SystemMenu"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "创建新菜单",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-菜单"
+                ],
+                "summary": "创建菜单",
+                "parameters": [
+                    {
+                        "description": "菜单数据",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.CreateMenuReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "创建成功，返回菜单ID",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/menus/tree": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取菜单树形结构（层级结构）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-菜单"
+                ],
+                "summary": "获取菜单树",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "additionalProperties": true
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/menus/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新菜单信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-菜单"
+                ],
+                "summary": "更新菜单",
+                "parameters": [
+                    {
+                        "description": "菜单数据",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.UpdateMenuReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据ID删除菜单（有子菜单时无法删除）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-菜单"
+                ],
+                "summary": "删除菜单",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "菜单ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "该菜单下存在子菜单，无法删除",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/operation-logs": {
             "get": {
                 "security": [
                     {
@@ -311,11 +626,68 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "清空所有操作日志（危险操作）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-日志"
+                ],
+                "summary": "清空操作日志",
+                "responses": {
+                    "200": {
+                        "description": "清空成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
             }
         },
-        "/api/v1/system/login": {
+        "/api/v1/system/operation-logs/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据ID删除操作日志",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-日志"
+                ],
+                "summary": "删除操作日志",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "日志ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/refresh-token": {
             "post": {
-                "description": "用户登录接口，返回JWT token",
+                "description": "使用当前token刷新，返回新的token和过期时间。刷新前会校验token有效性、黑名单、用户状态及密码版本。",
                 "consumes": [
                     "application/json"
                 ],
@@ -325,21 +697,19 @@ const docTemplate = `{
                 "tags": [
                     "系统管理-认证"
                 ],
-                "summary": "用户登录",
+                "summary": "刷新Token",
                 "parameters": [
                     {
-                        "description": "登录参数",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/models.SystemUserLoginReq"
-                        }
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "登录成功",
+                        "description": "刷新成功",
                         "schema": {
                             "allOf": [
                                 {
@@ -356,14 +726,8 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
                     "401": {
-                        "description": "登录失败，用户名或密码错误",
+                        "description": "token无效或已过期/已被注销/用户已禁用",
                         "schema": {
                             "$ref": "#/definitions/res.Response"
                         }
@@ -371,455 +735,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/logout": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "用户登出，token将被加入黑名单",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-认证"
-                ],
-                "summary": "用户登出",
-                "responses": {
-                    "200": {
-                        "description": "登出成功",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/menu/create": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "创建新菜单",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-菜单"
-                ],
-                "summary": "创建菜单",
-                "parameters": [
-                    {
-                        "description": "菜单数据",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/v1.CreateMenuReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "创建成功，返回菜单ID",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "integer"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/menu/delete/{id}": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "根据ID删除菜单（有子菜单时无法删除）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-菜单"
-                ],
-                "summary": "删除菜单",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "菜单ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "删除成功",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "该菜单下存在子菜单，无法删除",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/menu/list": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "获取所有菜单列表（扁平结构）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-菜单"
-                ],
-                "summary": "获取菜单列表",
-                "responses": {
-                    "200": {
-                        "description": "成功",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "array",
-                                            "items": {
-                                                "$ref": "#/definitions/models.SystemMenu"
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/menu/tree": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "获取菜单树形结构（层级结构）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-菜单"
-                ],
-                "summary": "获取菜单树",
-                "responses": {
-                    "200": {
-                        "description": "成功",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "object",
-                                                "additionalProperties": true
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/menu/update": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "更新菜单信息",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-菜单"
-                ],
-                "summary": "更新菜单",
-                "parameters": [
-                    {
-                        "description": "菜单数据",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/v1.UpdateMenuReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "更新成功",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/role/create": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "创建新角色，角色代码不能重复",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-角色"
-                ],
-                "summary": "创建角色",
-                "parameters": [
-                    {
-                        "description": "角色数据",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/v1.CreateRoleReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "创建成功，返回角色ID",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "integer"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/role/delete/{id}": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "根据ID删除角色（有关联用户时无法删除，系统保留角色无法删除）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-角色"
-                ],
-                "summary": "删除角色",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "角色ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "删除成功",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "该角色下存在用户，无法删除/系统保留角色无法删除",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/role/detail/{id}": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "根据ID获取角色详细信息",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-角色"
-                ],
-                "summary": "获取角色详情",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "角色ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "成功",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/models.SystemRole"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "角色不存在",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/role/list": {
+        "/api/v1/system/roles": {
             "get": {
                 "security": [
                     {
@@ -895,16 +811,14 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/system/role/menus": {
-            "put": {
+            },
+            "post": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "为角色分配菜单权限",
+                "description": "创建新角色，角色代码不能重复",
                 "consumes": [
                     "application/json"
                 ],
@@ -914,23 +828,35 @@ const docTemplate = `{
                 "tags": [
                     "系统管理-角色"
                 ],
-                "summary": "设置角色的菜单权限",
+                "summary": "创建角色",
                 "parameters": [
                     {
-                        "description": "权限数据",
+                        "description": "角色数据",
                         "name": "data",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/go-vue-admin_services_v1.SetRoleMenusReq"
+                            "$ref": "#/definitions/v1.CreateRoleReq"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "设置成功",
+                        "description": "创建成功，返回角色ID",
                         "schema": {
-                            "$ref": "#/definitions/res.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "400": {
@@ -948,7 +874,211 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/role/menus/{id}": {
+        "/api/v1/system/roles/options": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取角色选项列表（排除超级管理员，用于下拉选择）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-角色"
+                ],
+                "summary": "获取角色选项列表",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.SystemRole"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/roles/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据ID获取角色详细信息",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-角色"
+                ],
+                "summary": "获取角色详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "角色ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.SystemRole"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "角色不存在",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新角色信息（角色代码不能修改）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-角色"
+                ],
+                "summary": "更新角色",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "角色ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "角色数据",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.UpdateRoleReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据ID删除角色（有关联用户时无法删除，系统保留角色无法删除）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-角色"
+                ],
+                "summary": "删除角色",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "角色ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "该角色下存在用户，无法删除/系统保留角色无法删除",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/roles/{id}/menus": {
             "get": {
                 "security": [
                     {
@@ -1001,62 +1131,14 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/api/v1/system/role/options": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "获取角色选项列表（排除超级管理员，用于下拉选择）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-角色"
-                ],
-                "summary": "获取角色选项列表",
-                "responses": {
-                    "200": {
-                        "description": "成功",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "type": "array",
-                                            "items": {
-                                                "$ref": "#/definitions/models.SystemRole"
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/role/update": {
+            },
             "put": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "更新角色信息（角色代码不能修改）",
+                "description": "为角色分配菜单权限",
                 "consumes": [
                     "application/json"
                 ],
@@ -1066,21 +1148,21 @@ const docTemplate = `{
                 "tags": [
                     "系统管理-角色"
                 ],
-                "summary": "更新角色",
+                "summary": "设置角色的菜单权限",
                 "parameters": [
                     {
-                        "description": "角色数据",
+                        "description": "权限数据",
                         "name": "data",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/v1.UpdateRoleReq"
+                            "$ref": "#/definitions/go-vue-admin_services_v1.SetRoleMenusReq"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "更新成功",
+                        "description": "设置成功",
                         "schema": {
                             "$ref": "#/definitions/res.Response"
                         }
@@ -1147,38 +1229,24 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/user/create": {
-            "post": {
+        "/api/v1/system/settings": {
+            "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "创建新用户，用户名不能重复",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "获取系统设置信息（操作日志、登录日志开关状态）",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "系统管理-用户"
+                    "系统管理-系统设置"
                 ],
-                "summary": "创建用户",
-                "parameters": [
-                    {
-                        "description": "用户数据",
-                        "name": "data",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/models.SystemUserReq"
-                        }
-                    }
-                ],
+                "summary": "获取系统设置",
                 "responses": {
                     "200": {
-                        "description": "创建成功，返回用户ID",
+                        "description": "成功",
                         "schema": {
                             "allOf": [
                                 {
@@ -1188,11 +1256,54 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "integer"
+                                            "$ref": "#/definitions/models.SystemSetting"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "更新系统设置（开启/关闭操作日志、登录日志）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-系统设置"
+                ],
+                "summary": "更新系统设置",
+                "parameters": [
+                    {
+                        "description": "设置信息",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/v1.UpdateSettingReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
                         }
                     },
                     "400": {
@@ -1210,96 +1321,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/user/delete/{id}": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "根据ID删除用户（软删除）",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-用户"
-                ],
-                "summary": "删除用户",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "用户ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "删除成功",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "用户不存在",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/user/info": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "获取当前登录用户的详细信息",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "系统管理-认证"
-                ],
-                "summary": "获取当前用户信息",
-                "responses": {
-                    "200": {
-                        "description": "成功",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/res.Response"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/models.SystemUser"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "401": {
-                        "description": "未登录或token过期",
-                        "schema": {
-                            "$ref": "#/definitions/res.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/system/user/list": {
+        "/api/v1/system/users": {
             "get": {
                 "security": [
                     {
@@ -1381,9 +1403,113 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "创建新用户，用户名不能重复",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-用户"
+                ],
+                "summary": "创建用户",
+                "parameters": [
+                    {
+                        "description": "用户数据",
+                        "name": "data",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SystemUserReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "创建成功，返回用户ID",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
             }
         },
-        "/api/v1/system/user/password": {
+        "/api/v1/system/users/info": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "获取当前登录用户的详细信息",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-认证"
+                ],
+                "summary": "获取当前用户信息",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/res.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.SystemUser"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/system/users/password": {
             "put": {
                 "security": [
                     {
@@ -1434,7 +1560,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/user/profile": {
+        "/api/v1/system/users/profile": {
             "put": {
                 "security": [
                     {
@@ -1479,14 +1605,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/system/user/update": {
+        "/api/v1/system/users/{id}": {
             "put": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "更新用户信息，用户名不能与其他用户重复。管理员不能通过此接口修改密码，请使用密码重置功能。",
+                "description": "更新用户信息，用户名不能与其他用户重复。管理员可通过此接口修改密码（传入 password 字段）。",
                 "consumes": [
                     "application/json"
                 ],
@@ -1498,6 +1624,13 @@ const docTemplate = `{
                 ],
                 "summary": "更新用户",
                 "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "用户ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "用户数据",
                         "name": "data",
@@ -1517,6 +1650,50 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "未登录或token过期",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "用户不存在",
+                        "schema": {
+                            "$ref": "#/definitions/res.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "根据ID删除用户（物理删除）",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "系统管理-用户"
+                ],
+                "summary": "删除用户",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "用户ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
                         "schema": {
                             "$ref": "#/definitions/res.Response"
                         }
@@ -1638,6 +1815,9 @@ const docTemplate = `{
         "models.SystemMenu": {
             "type": "object",
             "properties": {
+                "apiPath": {
+                    "type": "string"
+                },
                 "component": {
                     "type": "string"
                 },
@@ -1655,6 +1835,9 @@ const docTemplate = `{
                 },
                 "menuType": {
                     "type": "integer"
+                },
+                "method": {
+                    "type": "string"
                 },
                 "parentId": {
                     "type": "integer"
@@ -1708,6 +1891,26 @@ const docTemplate = `{
                 }
             }
         },
+        "models.SystemSetting": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "enableLoginLog": {
+                    "type": "integer"
+                },
+                "enableOperationLog": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "models.SystemUser": {
             "type": "object",
             "properties": {
@@ -1731,6 +1934,13 @@ const docTemplate = `{
                 },
                 "nickname": {
                     "type": "string"
+                },
+                "perms": {
+                    "description": "前端需要的按钮/接口权限标识数组",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "phone": {
                     "type": "string"
@@ -1762,10 +1972,18 @@ const docTemplate = `{
         "models.SystemUserLoginReq": {
             "type": "object",
             "required": [
+                "captchaCode",
+                "captchaId",
                 "password",
                 "username"
             ],
             "properties": {
+                "captchaCode": {
+                    "type": "string"
+                },
+                "captchaId": {
+                    "type": "string"
+                },
                 "password": {
                     "type": "string"
                 },
@@ -1916,6 +2134,9 @@ const docTemplate = `{
                 "menuType"
             ],
             "properties": {
+                "apiPath": {
+                    "type": "string"
+                },
                 "component": {
                     "type": "string"
                 },
@@ -1931,6 +2152,15 @@ const docTemplate = `{
                         1,
                         2,
                         3
+                    ]
+                },
+                "method": {
+                    "type": "string",
+                    "enum": [
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE"
                     ]
                 },
                 "parentId": {
@@ -1949,7 +2179,11 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "visible": {
-                    "type": "integer"
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2
+                    ]
                 }
             }
         },
@@ -1985,6 +2219,9 @@ const docTemplate = `{
                 "menuType"
             ],
             "properties": {
+                "apiPath": {
+                    "type": "string"
+                },
                 "component": {
                     "type": "string"
                 },
@@ -2005,6 +2242,15 @@ const docTemplate = `{
                         3
                     ]
                 },
+                "method": {
+                    "type": "string",
+                    "enum": [
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "DELETE"
+                    ]
+                },
                 "parentId": {
                     "type": "integer"
                 },
@@ -2021,7 +2267,11 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "visible": {
-                    "type": "integer"
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2
+                    ]
                 }
             }
         },
@@ -2046,6 +2296,25 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "integer"
+                }
+            }
+        },
+        "v1.UpdateSettingReq": {
+            "type": "object",
+            "properties": {
+                "enableLoginLog": {
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2
+                    ]
+                },
+                "enableOperationLog": {
+                    "type": "integer",
+                    "enum": [
+                        1,
+                        2
+                    ]
                 }
             }
         }

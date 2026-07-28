@@ -8,13 +8,15 @@ import (
 
 // InitRouter 初始化路由
 func InitRouter(r *gin.Engine) *gin.RouterGroup {
-	// 全局中间件
 	r.Use(middleware.Cors())
 
-	// API v1 版本路由组
+	// 健康检查（无需鉴权，供负载均衡/容器探活使用）
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
 	apiV1 := r.Group("/api/v1")
 	{
-		// 系统管理路由
 		InitSystemRouter(apiV1)
 	}
 

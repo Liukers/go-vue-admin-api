@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"go-vue-admin/global"
+	"go-vue-admin/conf"
 	"go-vue-admin/models/res"
 	"sync"
 	"time"
@@ -32,7 +32,6 @@ func NewRateLimiter() *RateLimiter {
 	rl := &RateLimiter{
 		visitors: make(map[string]*visitor),
 	}
-	// 启动清理协程
 	go rl.cleanup()
 	return rl
 }
@@ -46,7 +45,6 @@ func (rl *RateLimiter) Allow(key string, limit int, window time.Duration) bool {
 	v, exists := rl.visitors[key]
 
 	if !exists || now.After(v.resetTime) {
-		// 新访问者或已过期，创建新的限制
 		rl.visitors[key] = &visitor{
 			limit:     limit,
 			remaining: limit - 1,
@@ -57,10 +55,8 @@ func (rl *RateLimiter) Allow(key string, limit int, window time.Duration) bool {
 		return true
 	}
 
-	// 更新最后访问时间
 	v.lastSeen = now
 
-	// 检查剩余次数
 	if v.remaining > 0 {
 		v.remaining--
 		return true
@@ -98,7 +94,6 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
-// 全局限流器实例
 var (
 	loginLimiter = NewRateLimiter()
 	apiLimiter   = NewRateLimiter()
@@ -106,7 +101,6 @@ var (
 
 // getRealIP 获取真实IP（防止X-Forwarded-For伪造）
 func getRealIP(c *gin.Context) string {
-	// 默认使用直接连接的IP
 	ip := c.Request.RemoteAddr
 	if host, _, err := net.SplitHostPort(ip); err == nil {
 		ip = host
@@ -114,7 +108,7 @@ func getRealIP(c *gin.Context) string {
 	
 	// 只有显式配置信任代理时才读取 X-Forwarded-For / X-Real-Ip
 	// 生产环境使用反向代理时，应在 setting.yaml 中设置 system.trust-proxy: true
-	if global.Config.System.TrustProxy {
+	if conf.GetConfig().System.TrustProxy {
 		xff := c.Request.Header.Get("X-Forwarded-For")
 		if xff != "" {
 			// 取第一个IP（最原始的客户端IP）
@@ -135,27 +129,21 @@ func getRealIP(c *gin.Context) string {
 	return ip
 }
 
-// isPrivateIP 检查是否为内网IP
-func isPrivateIP(ip string) bool {
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return false
-	}
-	// 检查私有IP段
-	privateRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"::1/128",
-	}
-	for _, cidr := range privateRanges {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err == nil && ipNet.Contains(parsedIP) {
-			return true
+// CaptchaRateLimit 验证码限流中间件
+// 限制每个IP每分钟最多20次，防止刷量挤占验证码存储并消耗图片生成资源
+func CaptchaRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := getRealIP(c)
+		key := fmt.Sprintf("captcha:%s", ip)
+
+		if !loginLimiter.Allow(key, 20, time.Minute) {
+			res.FailWithMessage(c, res.ErrorCodeTooManyRequests, "验证码获取过于频繁，请稍后再试")
+			c.Abort()
+			return
 		}
+
+		c.Next()
 	}
-	return false
 }
 
 // LoginRateLimit 登录限流中间件
@@ -185,7 +173,6 @@ func APIRateLimit() gin.HandlerFunc {
 			return
 		}
 		
-		// 安全的类型断言
 		uid, ok := userId.(uint)
 		if !ok {
 			c.Next()

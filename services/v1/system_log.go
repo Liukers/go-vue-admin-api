@@ -14,17 +14,14 @@ func (s *SystemLogService) GetOperationLogList(page, pageSize int, username, sta
 
 	db := global.DB.Model(&models.OperationLog{})
 
-	// 按用户名筛选
 	if username != "" {
 		db = db.Where("username LIKE ?", "%"+username+"%")
 	}
 
-	// 按状态筛选
 	if status != "" {
 		db = db.Where("status = ?", status)
 	}
 
-	// 按时间范围筛选
 	if startTime != "" {
 		db = db.Where("created_at >= ?", startTime)
 	}
@@ -32,12 +29,10 @@ func (s *SystemLogService) GetOperationLogList(page, pageSize int, username, sta
 		db = db.Where("created_at <= ?", endTime+" 23:59:59")
 	}
 
-	// 获取总数
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 查询数据，按时间倒序
 	err := db.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error
 
 	return logs, total, err
@@ -50,17 +45,14 @@ func (s *SystemLogService) GetLoginLogList(page, pageSize int, username, status,
 
 	db := global.DB.Model(&models.LoginLog{})
 
-	// 按用户名筛选
 	if username != "" {
 		db = db.Where("username LIKE ?", "%"+username+"%")
 	}
 
-	// 按状态筛选
 	if status != "" {
 		db = db.Where("status = ?", status)
 	}
 
-	// 按时间范围筛选
 	if startTime != "" {
 		db = db.Where("created_at >= ?", startTime)
 	}
@@ -68,12 +60,10 @@ func (s *SystemLogService) GetLoginLogList(page, pageSize int, username, status,
 		db = db.Where("created_at <= ?", endTime+" 23:59:59")
 	}
 
-	// 获取总数
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 查询数据，按时间倒序
 	err := db.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error
 
 	return logs, total, err

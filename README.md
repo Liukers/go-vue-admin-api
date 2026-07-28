@@ -18,13 +18,21 @@
 - ✅ CORS 跨域支持
 - ✅ 操作日志记录（支持开关控制）
 - ✅ 登录日志审计（支持开关控制）
-- ✅ Casbin RBAC 权限控制（API 级别）
+- ✅ Casbin RBAC 权限控制（API + 按钮级别）
 - ✅ 系统设置管理
 - ✅ 登录验证码（纯 Go 生成，内存存储，5 分钟 TTL）
 - ✅ 账户锁定（连续 5 次失败锁定 30 分钟）
 - ✅ 自定义参数校验（phone / password / status 标签）
 - ✅ 日志按日轮转（自动切割，防止单文件过大）
 - ✅ 统一错误码体系（1000~6999 分段语义化）
+- ✅ 启动安全检查（弱密钥/弱密码检测，release 模式拒绝弱密钥启动）
+- ✅ 优雅停机（SIGINT/SIGTERM，在途请求最多 10 秒完成，日志队列排空后退出）
+- ✅ 健康检查端点（`/healthz`，供容器/负载均衡探活）
+- ✅ 配置热更新（fsnotify 监听 + 原子替换，读取无数据竞争）
+- ✅ 日志保留期自动清理（默认 30 天）
+- ✅ 操作日志异步写入 + 字段级脱敏（密码等敏感字段不落盘）
+- ✅ 参数校验友好中文提示
+- ✅ 系统设置内存缓存（更新后主动失效）
 
 ## 🏗️ 技术栈
 
@@ -43,31 +51,39 @@
 .
 ├── api/v1/              # API 接口层（HTTP 处理）
 │   ├── system_user.go   # 用户管理接口
-│   ├── system_role.go   # 角色管理接口
-│   └── user.go          # 前台用户接口
+│   ├── system_role.go   # 角色/菜单管理接口
+│   ├── system_log.go    # 日志管理接口
+│   ├── system_setting.go# 系统设置接口
+│   └── system_captcha.go# 验证码接口
 ├── services/v1/         # 业务逻辑层（核心业务）
-│   ├── system_user.go   # 用户业务逻辑
-│   ├── system_role.go   # 角色业务逻辑
-│   └── user.go          # 前台用户业务逻辑
 ├── models/              # 数据模型层（结构体定义）
-│   ├── system_user.go   # 用户模型
-│   ├── system_role.go   # 角色模型（包含菜单）
-│   ├── system_log.go    # 日志模型
-│   └── res/             # 响应模型
+│   ├── menu_seed.go     # 默认菜单/按钮种子定义（唯一数据源）
+│   ├── constants/       # 状态常量
+│   └── res/             # 统一响应与错误码
 ├── router/v1/           # 路由层
 ├── middleware/          # 中间件
-│   ├── jwt_auth.go      # JWT认证
+│   ├── jwt_auth.go      # JWT认证（自动刷新、禁用/改密失效）
+│   ├── token_blacklist.go # Token黑名单
+│   ├── casbin_auth.go   # Casbin授权
+│   ├── operation_log.go # 操作日志（异步写入+敏感字段脱敏）
+│   ├── rate_limit.go    # 登录/API限流
 │   └── cors.go          # 跨域处理
 ├── docs/                # Swagger 文档
 ├── util/                # 工具函数
-│   └── captcha.go       # 验证码生成与校验（内存 TTL 存储）
+│   ├── casbin_policy.go # Casbin策略生成（唯一入口）
+│   ├── ensure_menus.go  # 默认菜单数据幂等迁移
+│   ├── captcha.go       # 验证码生成与校验（内存 TTL 存储）
+│   └── jwt.go           # JWT 签发/解析/刷新
 ├── global/              # 全局变量
-├── conf/                # 配置加载
+├── conf/                # 配置加载（热更新原子替换，见 conf.GetConfig()）
 ├── core/                # 核心初始化
+│   ├── security.go      # 启动安全检查（弱密钥/弱密码检测）
+│   ├── casbin.go        # Casbin初始化（含数据迁移、策略重建）
 │   ├── validator.go     # 自定义 Gin 校验器（phone / password / status）
-│   └── logrus.go        # 日志按日轮转
+│   └── logrus.go        # 日志按日轮转 + 保留期清理
 ├── flag/                # 命令行工具
-├── setting.yaml         # 配置文件
+├── setting.example.yaml # 配置模板（复制为 setting.yaml 后使用）
+├── setting.yaml         # 本地配置（含敏感信息，已被 .gitignore 忽略，请勿提交）
 ├── Makefile             # 快捷命令
 └── main.go              # 入口文件
 ```
@@ -170,7 +186,13 @@ CREATE DATABASE go-vue-admin DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unico
 
 ### 3. 配置
 
-修改配置文件 `setting.yaml`：
+`setting.yaml` 含数据库密码、JWT 密钥等敏感信息，已被 `.gitignore` 忽略，仓库中只提供模板。首次使用请先从模板复制一份：
+
+```bash
+cp setting.example.yaml setting.yaml
+```
+
+然后修改配置文件 `setting.yaml`：
 
 ```yaml
 system:
@@ -349,13 +371,17 @@ Authorization: Bearer {your-jwt-token}
 系统采用 **RBAC + Casbin** 模型：
 
 ```
-用户 → 角色 → 菜单权限 → Casbin 策略 → API 访问控制
+用户 → 角色 → 菜单/按钮权限 → Casbin 策略 → API 访问控制
 ```
 
-- **JWT 认证**: `middleware.JWTAuth()` 验证用户身份
-- **Casbin 授权**: `middleware.CasbinAuth()` 验证 API 访问权限
-- **自动同步**: 角色菜单权限变更时，Casbin 策略自动更新
+- **JWT 认证**: `middleware.JWTAuth()` 验证用户身份（禁用用户、改密后的旧 token 立即失效）
+- **Casbin 授权**: `middleware.CasbinAuth()` 验证 API 访问权限（`keyMatch2` 匹配，支持 `:id` 路径参数）
+- **按钮级权限**: 菜单表支持目录/菜单/按钮三种类型，菜单与按钮通过 `api_path` + `method` 字段声明其关联的后端接口，权限策略由菜单数据直接生成，新增模块无需改动代码
+- **内置权限点**: 每个业务菜单内置 `查看`（控制列表访问）、`新增`、`编辑`、`删除` 等按钮权限点，角色管理中只勾 `查看` 即为只读角色，按需组合即可
+- **前端联动**: 登录/用户信息接口返回 `perms` 权限标识数组，前端按钮通过 `v-perms` 指令控制显隐
+- **自动同步**: 角色菜单权限变更时，Casbin 策略自动重建；启动时自动补齐默认菜单数据并全量重建策略
 - **权限存储**: 策略存储在 MySQL `casbin_rule` 表中
+- **超级管理员**: `admin` 角色固定授予 `/*` 全部接口权限
 
 ### 系统设置
 
@@ -427,8 +453,11 @@ go build -o go-vue-admin-api
 
    ```yaml
    jwt:
-     signing-key: your-strong-secret-key-here # 生产环境必须使用强密钥
+     signing-key: your-strong-secret-key-here # 生产环境必须使用强密钥（可用 openssl rand -base64 48 生成）
    ```
+
+   > release 模式下若检测到已知弱密钥，服务将拒绝启动；debug 模式仅打印警告。
+   > 注意：更换密钥后所有已签发的 token 立即失效，用户需重新登录。
 
 2. **配置反向代理信任**（`setting.yaml`）
 
@@ -479,6 +508,21 @@ cp go-vue-admin-api setting.yaml /opt/go-admin/
 ./go-vue-admin-api
 ```
 
+### 版本升级
+
+从旧版本升级后，首次启动前请执行一次数据迁移（新增字段、补齐按钮权限数据并重建权限策略，幂等可重复执行）：
+
+```bash
+./go-vue-admin-api -db
+```
+
+### 运维
+
+- **健康检查**：`GET /healthz`（无需鉴权），供容器/负载均衡探活
+- **优雅停机**：收到 SIGINT/SIGTERM 后停止接收新请求，在途请求最多 10 秒完成，日志队列排空后退出
+- **日志管理**：日志按日切割存于 `logs/` 目录，启动时自动清理 30 天前的旧文件
+- **配置热更新**：修改 `setting.yaml` 后自动生效（原子替换，无并发竞争）；被启动期一次性读取的项（如数据库连接、端口）仍需重启生效
+
 ### Docker 部署
 
 ```dockerfile
@@ -491,6 +535,8 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/go-vue-admin-api .
+# 注意：setting.yaml 已被 .gitignore 忽略，构建镜像前需先在本地生成
+# （cp setting.example.yaml setting.yaml 并修改其中的敏感信息）
 COPY --from=builder /app/setting.yaml .
 EXPOSE 8080
 CMD ["./go-vue-admin-api"]

@@ -2,7 +2,7 @@ package conf
 
 import (
 	"fmt"
-	"net/url"
+	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -38,14 +38,12 @@ type Mysql struct {
 	LogZap       bool   `mapstructure:"log-zap" json:"log-zap" yaml:"log-zap"`
 }
 
-// Dsn 构建MySQL连接字符串（对用户名密码进行URL编码）
+// Dsn 构建MySQL连接字符串
+// 注意：不要对用户名密码做 URL 转义——MySQL DSN 不是 URL，
+// 驱动不会反转义，转义会改写含特殊字符的密码导致认证失败
 func (m *Mysql) Dsn() string {
-	// 对用户名和密码进行URL编码，防止特殊字符导致DSN解析失败
-	encodedUsername := url.QueryEscape(m.Username)
-	encodedPassword := url.QueryEscape(m.Password)
-	
 	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s",
-		encodedUsername, encodedPassword, m.Path, m.Port, m.DbName, m.Config)
+		m.Username, m.Password, m.Path, m.Port, m.DbName, m.Config)
 }
 
 type JWT struct {
@@ -84,7 +82,18 @@ type Cors struct {
 	AllowAll   bool            `mapstructure:"allow-all" json:"allow-all" yaml:"allow-all"`
 }
 
-var ServerConfig = new(Server)
+var (
+	// ServerConfig 初始配置（仅在启动时写入一次，之后不再修改；
+	// 需要读取热更新后配置的请求路径请使用 GetConfig()）
+	ServerConfig = new(Server)
+	// currentConfig 当前生效配置（热更新时原子替换，读取无数据竞争）
+	currentConfig atomic.Pointer[Server]
+)
+
+// GetConfig 获取当前生效的配置（热更新安全，每次返回最新快照）
+func GetConfig() *Server {
+	return currentConfig.Load()
+}
 
 func InitConfig(path string) (*Server, error) {
 	v := viper.New()
@@ -98,13 +107,19 @@ func InitConfig(path string) (*Server, error) {
 	if err := v.Unmarshal(ServerConfig); err != nil {
 		return nil, err
 	}
+	currentConfig.Store(ServerConfig)
 
 	v.WatchConfig()
 	v.OnConfigChange(func(e fsnotify.Event) {
 		fmt.Printf("配置文件发生变化: %s\n", e.Name)
-		if err := v.Unmarshal(ServerConfig); err != nil {
+		// 热更新：解析为新实例后原子替换指针，
+		// 不再原地改写字段，避免与并发读取方产生数据竞争
+		newCfg := new(Server)
+		if err := v.Unmarshal(newCfg); err != nil {
 			fmt.Printf("重新加载配置失败: %v\n", err)
+			return
 		}
+		currentConfig.Store(newCfg)
 	})
 
 	return ServerConfig, nil

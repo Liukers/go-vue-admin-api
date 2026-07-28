@@ -7,7 +7,9 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"math/rand"
+	"crypto/rand"
+	"math/big"
+	"sort"
 	"sync"
 	"time"
 )
@@ -22,8 +24,13 @@ type captchaStore struct {
 
 type captchaItem struct {
 	Code      string
+	CreatedAt time.Time
 	ExpiresAt time.Time
+	FailCount int
 }
+
+// maxCaptchaFailCount 单个验证码允许的最大错误尝试次数（达到即作废，防止无限猜测）
+const maxCaptchaFailCount = 5
 
 var defaultCaptchaStore = &captchaStore{
 	items:    make(map[string]*captchaItem),
@@ -31,7 +38,6 @@ var defaultCaptchaStore = &captchaStore{
 }
 
 func init() {
-	// 启动清理协程，每5分钟清理过期验证码
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -46,13 +52,15 @@ func (s *captchaStore) Set(id, code string, expire time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 防止内存无限增长，超过上限时清理一半
+	// 防止内存无限增长：超过上限时按创建时间淘汰最旧的10%，
+	// 不再随机删一半（避免攻击者刷量把正常用户的验证码随机挤掉形成登录DoS）
 	if len(s.items) >= s.maxItems {
-		s.cleanHalfLocked()
+		s.evictOldestLocked(s.maxItems / 10)
 	}
 
 	s.items[id] = &captchaItem{
 		Code:      code,
+		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(expire),
 	}
 }
@@ -67,19 +75,22 @@ func (s *captchaStore) Get(id, answer string) bool {
 		return false
 	}
 
-	// 检查是否过期
 	if time.Now().After(item.ExpiresAt) {
 		delete(s.items, id)
 		return false
 	}
 
-	// 验证码不匹配，直接返回 false（不删除，允许用户重试）
+	// 验证码不匹配：累计失败次数，达到上限立即作废
 	if item.Code != answer {
+		item.FailCount++
+		if item.FailCount >= maxCaptchaFailCount {
+			delete(s.items, id)
+		}
 		return false
 	}
 
-	// 验证通过：延迟 3 秒后删除，防止用户快速双击/并发请求导致第二个请求失败
-	item.ExpiresAt = time.Now().Add(3 * time.Second)
+	// 验证通过立即删除，防止重放
+	delete(s.items, id)
 	return true
 }
 
@@ -96,16 +107,19 @@ func (s *captchaStore) cleanExpired() {
 	}
 }
 
-// cleanHalfLocked 清理一半验证码（在锁内调用）
-func (s *captchaStore) cleanHalfLocked() {
-	count := 0
-	target := len(s.items) / 2
-	for id := range s.items {
-		if count >= target {
-			break
-		}
-		delete(s.items, id)
-		count++
+// evictOldestLocked 按创建时间淘汰最旧的 n 个验证码（在锁内调用）
+func (s *captchaStore) evictOldestLocked(n int) {
+	type kv struct {
+		id string
+		t  time.Time
+	}
+	list := make([]kv, 0, len(s.items))
+	for id, item := range s.items {
+		list = append(list, kv{id, item.CreatedAt})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].t.Before(list[j].t) })
+	for i := 0; i < n && i < len(list); i++ {
+		delete(s.items, list[i].id)
 	}
 }
 
@@ -141,11 +155,20 @@ func VerifyCaptcha(id, answer string) bool {
 	return defaultCaptchaStore.Get(id, answer)
 }
 
+// cryptoRandInt 使用加密安全随机数生成 [0, max) 的随机整数
+func cryptoRandInt(max int) int {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return int(n.Int64())
+}
+
 // randDigitCode 生成随机数字验证码
 func randDigitCode(length int) string {
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = byte('0' + rand.Intn(10))
+		b[i] = byte('0' + cryptoRandInt(10))
 	}
 	return string(b)
 }
@@ -154,24 +177,20 @@ func randDigitCode(length int) string {
 func drawDigitCaptcha(code string) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, captchaWidth, captchaHeight))
 
-	// 背景
 	draw.Draw(img, img.Bounds(), &image.Uniform{bgColor}, image.Point{}, draw.Src)
 
-	// 干扰线
 	for i := 0; i < 6; i++ {
 		drawNoiseLine(img)
 	}
 
-	// 干扰点
 	for i := 0; i < 60; i++ {
 		drawNoisePoint(img)
 	}
 
-	// 绘制每个数字
 	charWidth := captchaWidth / len(code)
 	for i, ch := range code {
-		x := i*charWidth + charWidth/4 + rand.Intn(6)
-		y := captchaHeight/2 + 5 + rand.Intn(4) - 2
+		x := i*charWidth + charWidth/4 + cryptoRandInt(6)
+		y := captchaHeight/2 + 5 + cryptoRandInt(4) - 2
 		drawDigit(img, int(ch-'0'), x, y, i)
 	}
 
@@ -183,7 +202,7 @@ func drawDigit(img *image.RGBA, digit, x, y, idx int) {
 	col := fontColors[idx%len(fontColors)]
 	// 3x5 点阵数字
 	bitmap := digitBitmap[digit]
-	pixelSize := 3 + rand.Intn(2) // 3~4 像素
+	pixelSize := 3 + cryptoRandInt(2) // 3~4 像素
 	offsetY := y - 10
 
 	for row := 0; row < 5; row++ {
@@ -211,11 +230,11 @@ func fillRect(img *image.RGBA, x, y, w, h int, c color.RGBA) {
 
 // drawNoiseLine 绘制干扰线
 func drawNoiseLine(img *image.RGBA) {
-	c := noiseColors[rand.Intn(len(noiseColors))]
-	x1 := rand.Intn(captchaWidth)
-	y1 := rand.Intn(captchaHeight)
-	x2 := rand.Intn(captchaWidth)
-	y2 := rand.Intn(captchaHeight)
+	c := noiseColors[cryptoRandInt(len(noiseColors))]
+	x1 := cryptoRandInt(captchaWidth)
+	y1 := cryptoRandInt(captchaHeight)
+	x2 := cryptoRandInt(captchaWidth)
+	y2 := cryptoRandInt(captchaHeight)
 
 	steps := 30
 	for i := 0; i <= steps; i++ {
@@ -230,9 +249,9 @@ func drawNoiseLine(img *image.RGBA) {
 
 // drawNoisePoint 绘制干扰点
 func drawNoisePoint(img *image.RGBA) {
-	c := noiseColors[rand.Intn(len(noiseColors))]
-	x := rand.Intn(captchaWidth)
-	y := rand.Intn(captchaHeight)
+	c := noiseColors[cryptoRandInt(len(noiseColors))]
+	x := cryptoRandInt(captchaWidth)
+	y := cryptoRandInt(captchaHeight)
 	img.Set(x, y, c)
 }
 
